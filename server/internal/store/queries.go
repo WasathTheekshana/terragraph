@@ -62,6 +62,7 @@ type Usage struct {
 	CallName         string  `json:"call_name"`
 	ModuleID         *int64  `json:"module_id"`
 	ModuleKey        *string `json:"module_key"`
+	ModuleKind       *string `json:"module_kind"`
 	Source           string  `json:"source"`
 	RefDeclared      string  `json:"ref_declared"`
 	RefResolved      string  `json:"ref_resolved"`
@@ -168,7 +169,7 @@ func (s *Store) ModuleConsumers(ctx context.Context, moduleID int64) ([]Usage, e
 
 func (s *Store) usages(ctx context.Context, where string, args ...any) ([]Usage, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT p.id, p.repo_url, p.path, u.call_name, u.module_id, m.source_key, u.source,
+		SELECT p.id, p.repo_url, p.path, u.call_name, u.module_id, m.source_key, m.kind, u.source,
 			u.ref_declared, u.ref_resolved, u.version_resolved, u.resolution_source, u.file, u.line,
 			`+pinnedVersionSQL+`, lv.tag, `+latestVersionSQL+`, `+majorsBehindSQL+`, `+outdatedSQL+`
 		FROM module_usages u
@@ -181,7 +182,7 @@ func (s *Store) usages(ctx context.Context, where string, args ...any) ([]Usage,
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Usage, error) {
 		var u Usage
-		err := row.Scan(&u.ProjectID, &u.ProjectRepoURL, &u.ProjectPath, &u.CallName, &u.ModuleID, &u.ModuleKey, &u.Source,
+		err := row.Scan(&u.ProjectID, &u.ProjectRepoURL, &u.ProjectPath, &u.CallName, &u.ModuleID, &u.ModuleKey, &u.ModuleKind, &u.Source,
 			&u.RefDeclared, &u.RefResolved, &u.VersionResolved, &u.ResolutionSource, &u.File, &u.Line,
 			&u.PinnedVersion, &u.LatestTag, &u.LatestVersion, &u.MajorsBehind, &u.Outdated)
 		return u, err

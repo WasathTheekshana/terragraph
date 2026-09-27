@@ -134,9 +134,11 @@ A usage looks like:
 {
   "project_id": 2,
   "project_repo_url": "git@github.com:example-org/payments.git",
+  "project_path": ".",
   "call_name": "vpc",
   "module_id": 1,
   "module_key": "github.com/terraform-aws-modules/terraform-aws-vpc",
+  "module_kind": "git",
   "source": "git::https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=v5.1.0",
   "ref_declared": "v5.1.0",
   "ref_resolved": "v5.1.0",

@@ -216,6 +216,9 @@ func TestIngestAndQuery(t *testing.T) {
 		if got != w {
 			t.Errorf("%s: got %+v, want %+v", u.CallName, got, w)
 		}
+		if wantKind := map[string]any{"vpc": "git", "vpc_edge": "git", "s3": "registry", "helpers": nil}[u.CallName]; deref(u.ModuleKind) != wantKind {
+			t.Errorf("%s: module kind = %v, want %v", u.CallName, deref(u.ModuleKind), wantKind)
+		}
 	}
 
 	modules, err := s.ListModules(ctx)

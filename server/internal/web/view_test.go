@@ -75,6 +75,78 @@ func TestItemStatus(t *testing.T) {
 	}
 }
 
+func TestRepoName(t *testing.T) {
+	tests := map[string]string{
+		"git@github.com:acme/platform-network.git":           "platform-network",
+		"https://github.com/acme/api.git":                    "api",
+		"https://github.com/acme/api":                        "api",
+		"https://github.com/acme/api/":                       "api",
+		"ssh://git@gitlab.example.com:2222/platform/vpc.git": "vpc",
+		"https://dev.azure.com/org/proj/_git/infra-live":     "infra-live",
+		"git@github.com:solo.git":                            "solo",
+		"file://laptop/C:/work/next-projects":                "next-projects",
+		"":                                                   "",
+	}
+	for in, want := range tests {
+		if got := repoName(in); got != want {
+			t.Errorf("repoName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestModuleName(t *testing.T) {
+	tests := []struct{ key, kind, want string }{
+		{"github.com/terraform-aws-modules/terraform-aws-vpc", "git", "terraform-aws-vpc"},
+		{"gitlab.example.com/platform/networking/vpc", "git", "vpc"},
+		{"registry.terraform.io/terraform-aws-modules/s3-bucket/aws", "registry", "s3-bucket/aws"},
+		{"app.terraform.io/acme/eks/azurerm", "registry", "eks/azurerm"},
+		{"s3.amazonaws.com/bucket/vpc.zip", "other", "vpc.zip"},
+	}
+	for _, tt := range tests {
+		if got := moduleName(tt.key, tt.kind); got != tt.want {
+			t.Errorf("moduleName(%q, %q) = %q, want %q", tt.key, tt.kind, got, tt.want)
+		}
+	}
+	if got := usageModuleName(store.Usage{ModuleKey: ptr("registry.terraform.io/x/eks/aws"), ModuleKind: ptr("registry")}); got != "eks/aws" {
+		t.Errorf("usageModuleName = %q", got)
+	}
+	if got := usageModuleName(store.Usage{}); got != "-" {
+		t.Errorf("usageModuleName of a local module = %q", got)
+	}
+}
+
+func TestModulesSortByDisplayedName(t *testing.T) {
+	ms := []store.Module{
+		{Key: "github.com/org/zeta", Kind: "git"},
+		{Key: "registry.terraform.io/x/alb/aws", Kind: "registry"},
+		{Key: "github.com/org/Mid", Kind: "git"},
+	}
+	var got []string
+	for _, m := range filterSortModules(ms, listQuery{Sort: "name"}) {
+		got = append(got, moduleName(m.Key, m.Kind))
+	}
+	if want := []string{"alb/aws", "Mid", "zeta"}; !slices.Equal(got, want) {
+		t.Errorf("sorted = %q, want %q", got, want)
+	}
+}
+
+func TestProjectsSortByDisplayedName(t *testing.T) {
+	ps := []store.Project{
+		{RepoURL: "https://github.com/org/zeta.git"},
+		{RepoURL: "git@github.com:org/Alpha.git"},
+		{RepoURL: "git@github.com:org/mid.git", Path: "envs/prod"},
+		{RepoURL: "git@github.com:org/mid.git", Path: "envs/dev"},
+	}
+	var got []string
+	for _, p := range filterSortProjects(ps, listQuery{Sort: "name"}) {
+		got = append(got, repoName(p.RepoURL)+" "+p.Path)
+	}
+	want := []string{"Alpha ", "mid envs/dev", "mid envs/prod", "zeta "}
+	if !slices.Equal(got, want) {
+		t.Errorf("sorted = %q, want %q", got, want)
+	}
+}
+
 func TestEveryToneHasBadgeClasses(t *testing.T) {
 	for _, tn := range []tone{toneOK, toneWarn, toneBad, toneMuted} {
 		if badgeClasses[tn] == "" {

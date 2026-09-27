@@ -67,6 +67,17 @@ templ pageHeader(title string, subtitle string) {
 	</div>
 }
 
+// namedHeader heads a project or module page with its short name; the full
+// URL or key is kept as a tooltip.
+templ namedHeader(name string, full string, subtitle string) {
+	<div>
+		<h1 class="text-2xl font-semibold tracking-tight break-all" title={ full }>{ name }</h1>
+		if subtitle != "" {
+			<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{ subtitle }</p>
+		}
+	</div>
+}
+
 templ backLink(href templ.SafeURL, label string) {
 	<a href={ href } class="text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">← { label }</a>
 }
@@ -181,7 +192,7 @@ templ progressBar(value int, total int, label string) {
 // projectName shows a project's repo, with its path inside the repo when it
 // isn't the root.
 templ projectName(repoURL string, path string, href templ.SafeURL) {
-	<a href={ href } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ repoURL }</a>
+	<a href={ href } title={ repoURL } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ repoName(repoURL) }</a>
 	if p := projectPath(path); p != "" {
 		<div class="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">{ p }</div>
 	}

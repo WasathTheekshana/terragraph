@@ -243,6 +243,40 @@ func TestProjectPathsShown(t *testing.T) {
 	}
 }
 
+func TestProjectsShowRepoNames(t *testing.T) {
+	h := newTestHandler(sampleStore())
+	_, body := get(t, h, "/")
+	for _, want := range []string{`title="git@github.com:org/payments.git"`, `>payments</a>`, `>network</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("projects list missing %q", want)
+		}
+	}
+	_, body = get(t, h, "/projects/1")
+	if !strings.Contains(body, "<title>payments · terragraph</title>") || !strings.Contains(body, `title="git@github.com:org/payments.git">payments</h1>`) {
+		t.Error("project page should be headed by the repo name, with the full URL as a tooltip")
+	}
+	if strings.Contains(body, "git@github.com:org/payments.git · ") {
+		t.Error("project page subtitle still spells out the full URL")
+	}
+	if !strings.Contains(body, `title="github.com/org/vpc" class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">vpc</a>`) {
+		t.Error("module calls should link modules by name, with the key as a tooltip")
+	}
+}
+
+func TestModulesShowNames(t *testing.T) {
+	h := newTestHandler(sampleStore())
+	_, body := get(t, h, "/modules")
+	for _, want := range []string{`title="github.com/org/vpc"`, `>vpc</a>`, `title="registry.terraform.io/x/eks/aws"`, `>eks/aws</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("modules list missing %q", want)
+		}
+	}
+	_, body = get(t, h, "/modules/10")
+	if !strings.Contains(body, "<title>vpc · terragraph</title>") || !strings.Contains(body, `title="github.com/org/vpc">vpc</h1>`) {
+		t.Error("module page should be headed by the module name, with the key as a tooltip")
+	}
+}
+
 func TestEmptyStates(t *testing.T) {
 	h := newTestHandler(&fakeStore{})
 	for path, want := range map[string]string{"/": "No projects scanned yet", "/modules": "No modules yet", "/runs": "No scans yet"} {

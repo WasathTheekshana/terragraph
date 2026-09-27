@@ -119,6 +119,44 @@ func itemLink(it store.RunItem) templ.SafeURL {
 
 func runURL(id int64) templ.SafeURL { return templ.SafeURL(fmt.Sprintf("/runs/%d", id)) }
 
+// repoName is the short name a repo is shown by: the last segment of its URL
+// without ".git", e.g. "platform-network" for
+// git@github.com:acme/platform-network.git. The full URL stays available as
+// a tooltip, since names can repeat across organizations.
+func repoName(url string) string {
+	s := strings.TrimSuffix(strings.TrimRight(url, "/"), ".git")
+	if i := strings.LastIndexAny(s, "/:"); i >= 0 && i < len(s)-1 {
+		s = s[i+1:]
+	}
+	if s == "" {
+		return url
+	}
+	return s
+}
+
+// moduleName is the short name a module is shown by. A registry module keeps
+// its provider ("s3-bucket/aws"), since that's part of its identity; git and
+// other modules show their repo or file name.
+func moduleName(key, kind string) string {
+	if kind == "registry" {
+		if parts := strings.Split(key, "/"); len(parts) == 4 {
+			return parts[2] + "/" + parts[3]
+		}
+	}
+	return repoName(key)
+}
+
+func usageModuleName(u store.Usage) string {
+	if u.ModuleKey == nil {
+		return "-"
+	}
+	kind := ""
+	if u.ModuleKind != nil {
+		kind = *u.ModuleKind
+	}
+	return moduleName(*u.ModuleKey, kind)
+}
+
 // projectPath is shown under a project's repo; the repo root needs no label.
 func projectPath(p string) string {
 	if p == "." {
@@ -249,7 +287,11 @@ func filterSortProjects(ps []store.Project, q listQuery) []store.Project {
 			c = compareTime(a.LastScanAt, b.LastScanAt)
 		}
 		if c == 0 {
-			c = cmp.Or(cmp.Compare(a.RepoURL, b.RepoURL), cmp.Compare(a.Path, b.Path))
+			c = cmp.Or(
+				cmp.Compare(strings.ToLower(repoName(a.RepoURL)), strings.ToLower(repoName(b.RepoURL))),
+				cmp.Compare(a.Path, b.Path),
+				cmp.Compare(a.RepoURL, b.RepoURL),
+			)
 		}
 		if q.Desc {
 			return -c
@@ -274,7 +316,10 @@ func filterSortModules(ms []store.Module, q listQuery) []store.Module {
 			c = compareTime(a.VersionsScannedAt, b.VersionsScannedAt)
 		}
 		if c == 0 {
-			c = cmp.Compare(a.Key, b.Key)
+			c = cmp.Or(
+				cmp.Compare(strings.ToLower(moduleName(a.Key, a.Kind)), strings.ToLower(moduleName(b.Key, b.Kind))),
+				cmp.Compare(a.Key, b.Key),
+			)
 		}
 		if q.Desc {
 			return -c

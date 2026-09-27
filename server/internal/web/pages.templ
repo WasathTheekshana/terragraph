@@ -63,10 +63,10 @@ templ projectsPage(all []store.Project, shown []store.Project, q listQuery) {
 }
 
 templ projectPage(p store.Project, usages []store.Usage) {
-	@layout(p.RepoURL, "projects") {
+	@layout(repoName(p.RepoURL), "projects") {
 		@backLink("/", "All projects")
 		<div class="mt-4">
-			@pageHeader(p.RepoURL, fmt.Sprintf("%sBranch %s · commit %s · scanned %s", pathPrefix(p.Path), p.LastBranch, shortSHA(p.LastCommitSHA), formatTime(p.LastScanAt)))
+			@namedHeader(repoName(p.RepoURL), p.RepoURL, fmt.Sprintf("%sBranch %s · commit %s · scanned %s", pathPrefix(p.Path), p.LastBranch, shortSHA(p.LastCommitSHA), formatTime(p.LastScanAt)))
 		</div>
 		{{ s := summarizeUsages(usages) }}
 		@statGrid() {
@@ -98,7 +98,7 @@ templ projectPage(p store.Project, usages []store.Usage) {
 							<td class="px-4 py-3 font-mono text-xs font-medium whitespace-nowrap">{ u.CallName }</td>
 							<td class="px-4 py-3">
 								if u.ModuleID != nil {
-									<a href={ moduleURL(*u.ModuleID) } class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ orDash(u.ModuleKey) }</a>
+									<a href={ moduleURL(*u.ModuleID) } title={ orDash(u.ModuleKey) } class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ usageModuleName(u) }</a>
 								} else {
 									<span class="text-slate-500 dark:text-slate-400">{ u.Source }</span>
 								}
@@ -156,7 +156,7 @@ templ modulesPage(all []store.Module, shown []store.Module, q listQuery) {
 						for _, m := range shown {
 							<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
 								<td class="px-4 py-3">
-									<a href={ moduleURL(m.ID) } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ m.Key }</a>
+									<a href={ moduleURL(m.ID) } title={ m.Key } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ moduleName(m.Key, m.Kind) }</a>
 								</td>
 								<td class="px-4 py-3 text-slate-600 dark:text-slate-300">{ m.Kind }</td>
 								<td class="px-4 py-3 font-mono text-xs whitespace-nowrap">{ orDash(m.LatestVersion) }</td>
@@ -175,10 +175,10 @@ templ modulesPage(all []store.Module, shown []store.Module, q listQuery) {
 }
 
 templ modulePage(m store.Module, consumers []store.Usage) {
-	@layout(m.Key, "modules") {
+	@layout(moduleName(m.Key, m.Kind), "modules") {
 		@backLink("/modules", "All modules")
 		<div class="mt-4">
-			@pageHeader(m.Key, fmt.Sprintf("%s module · latest %s · versions scanned %s", m.Kind, orDash(m.LatestVersion), formatTime(m.VersionsScannedAt)))
+			@namedHeader(moduleName(m.Key, m.Kind), m.Key, fmt.Sprintf("%s module · latest %s · versions scanned %s", m.Kind, orDash(m.LatestVersion), formatTime(m.VersionsScannedAt)))
 		</div>
 		{{ s := summarizeUsages(consumers) }}
 		@statGrid() {

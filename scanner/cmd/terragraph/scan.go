@@ -2,189 +2,165 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/WasathTheekshana/terragraph/scanner/internal/client"
-	"github.com/WasathTheekshana/terragraph/scanner/internal/gitinfo"
-	"github.com/WasathTheekshana/terragraph/scanner/internal/gittags"
-	"github.com/WasathTheekshana/terragraph/scanner/internal/hclscan"
-	"github.com/WasathTheekshana/terragraph/scanner/internal/moduleinit"
-	"github.com/WasathTheekshana/terragraph/scanner/internal/report"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/scan"
 )
 
-// commonFlags are shared by every scan mode: where to send the report.
-type commonFlags struct {
-	apiURL string
-	token  string
-	out    string
-	dryRun bool
+type scanFlags struct {
+	mode               string
+	opts               scan.Options
+	skipModuleVersions bool
+	concurrency        int
+	apiURL             string
+	token              string
+	out                string
+	dryRun             bool
 }
 
 func newScanCmd() *cobra.Command {
-	var mode string
-	var common commonFlags
-
-	// project-mode flags
-	var path, repoURL, commit, branch string
+	var f scanFlags
 
 	cmd := &cobra.Command{
 		Use:   "scan",
-		Short: "Scan a project or module repo and report facts to TerraGraph",
+		Short: "Scan Terraform under a path and report it to TerraGraph",
+		Long: `Scan finds every Terraform root under --path, whether that's one repo, a
+folder inside a repo, or a folder of many repos at any depth. Each root is
+reported as a project, and the git repos its modules come from are checked
+for released versions.
+
+Directories that another root uses as a local module, hidden directories,
+node_modules, and examples are skipped. Use --exclude for anything else.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Read from the environment here rather than as flag defaults, so
 			// the token never appears in --help or usage output in CI logs.
-			if common.apiURL == "" {
-				common.apiURL = os.Getenv("TERRAGRAPH_API_URL")
+			if f.apiURL == "" {
+				f.apiURL = os.Getenv("TERRAGRAPH_API_URL")
 			}
-			if common.token == "" {
-				common.token = os.Getenv("TERRAGRAPH_TOKEN")
+			if f.token == "" {
+				f.token = os.Getenv("TERRAGRAPH_TOKEN")
 			}
-			switch mode {
-			case "project":
-				return runProjectScan(common, path, repoURL, commit, branch)
-			case "module-repo":
-				return runModuleRepoScan(common, repoURL)
-			default:
-				return fmt.Errorf("--mode must be %q or %q, got %q", "project", "module-repo", mode)
-			}
+			return runScan(cmd.Context(), f)
 		},
 	}
 
-	cmd.Flags().StringVar(&mode, "mode", "", "scan mode: project | module-repo (required)")
-	_ = cmd.MarkFlagRequired("mode")
-
-	cmd.Flags().StringVar(&path, "path", ".", "project mode: root directory of the Terraform config to scan")
-	cmd.Flags().StringVar(&repoURL, "repo-url", "", "repo URL of the subject; auto-detected from git origin in project mode, required in module-repo mode")
-	cmd.Flags().StringVar(&commit, "commit", "", "project mode: commit SHA; auto-detected from local git if omitted")
-	cmd.Flags().StringVar(&branch, "branch", "", "project mode: branch name; auto-detected from local git if omitted")
-
-	cmd.Flags().StringVar(&common.apiURL, "api-url", "", "TerraGraph server base URL (default: env TERRAGRAPH_API_URL)")
-	cmd.Flags().StringVar(&common.token, "token", "", "auth token for the TerraGraph server (default: env TERRAGRAPH_TOKEN)")
-	cmd.Flags().StringVar(&common.out, "out", "", "also write the JSON report to this file")
-	cmd.Flags().BoolVar(&common.dryRun, "dry-run", false, "build the report and print/save it, but don't submit it to the server")
-
+	fl := cmd.Flags()
+	fl.StringVar(&f.mode, "mode", "project", "project: scan Terraform under --path | module-repo: list one module repo's versions")
+	fl.StringVar(&f.opts.Path, "path", ".", "directory to scan: a repo, a folder inside one, or a folder of many repos")
+	fl.StringSliceVar(&f.opts.Exclude, "exclude", nil, "directory name or relative path glob to skip; repeatable")
+	fl.StringVar(&f.opts.RepoURL, "repo-url", "", "repo URL to report; project mode reads it from git (single repo only), module-repo mode requires it")
+	fl.StringVar(&f.opts.Commit, "commit", "", "commit SHA to report instead of git's (single repo only)")
+	fl.StringVar(&f.opts.Branch, "branch", "", "branch to report for every repo instead of git's, e.g. from CI variables")
+	fl.BoolVar(&f.skipModuleVersions, "skip-module-versions", false, "don't list released versions of the git repos modules come from")
+	fl.IntVar(&f.concurrency, "concurrency", 4, "items to scan at the same time")
+	fl.StringVar(&f.apiURL, "api-url", "", "TerraGraph server base URL (default: env TERRAGRAPH_API_URL)")
+	fl.StringVar(&f.token, "token", "", "auth token for the TerraGraph server (default: env TERRAGRAPH_TOKEN)")
+	fl.StringVar(&f.out, "out", "", "also write the reports to this file as a JSON array")
+	fl.BoolVar(&f.dryRun, "dry-run", false, "print the reports instead of submitting them")
 	return cmd
 }
 
-func runProjectScan(common commonFlags, path, repoURL, commit, branch string) error {
-	if repoURL == "" {
-		repoURL = gitinfo.RemoteURL(path, "origin")
-	}
-	if commit == "" {
-		commit = gitinfo.CommitSHA(path)
-	}
-	if branch == "" {
-		branch = gitinfo.Branch(path)
-	}
-
-	calls, err := hclscan.Scan(path)
+func runScan(ctx context.Context, f scanFlags) error {
+	targets, label, err := plan(f)
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "Found %s.\n", describe(targets))
 
-	manifest, err := moduleinit.Load(path)
-	if err != nil {
-		// Non-fatal: a malformed/partial modules.json shouldn't block the
-		// scan, it just means we fall back to source-parsed refs.
-		fmt.Fprintf(os.Stderr, "warning: reading .terraform/modules/modules.json: %v\n", err)
-		manifest = nil
+	if f.dryRun || f.out != "" || f.apiURL == "" {
+		return collect(ctx, f, targets)
 	}
 
-	facts := make([]report.Fact, 0, len(calls))
-	for _, c := range calls {
-		fact := report.Fact{
-			Type:             report.FactTypeModuleCall,
-			CallName:         c.CallName,
-			Source:           c.Source,
-			RefDeclared:      c.RefDeclared,
-			RefResolved:      c.RefDeclared,
-			ResolutionSource: report.ResolutionSourceParse,
-			File:             c.File,
-			Line:             c.Line,
+	runner := &scan.Runner{
+		Client:      client.New(strings.TrimRight(f.apiURL, "/"), f.token),
+		Concurrency: f.concurrency,
+		Out:         os.Stderr,
+		UIBase:      strings.TrimRight(f.apiURL, "/"),
+	}
+	sum, err := runner.Run(ctx, label, targets)
+	if sum.RunID != 0 {
+		fmt.Fprintf(os.Stderr, "\n%d done, %d failed", sum.Done, sum.Failed)
+		if sum.NotApplied > 0 {
+			fmt.Fprintf(os.Stderr, ", %d recorded but not current", sum.NotApplied)
 		}
-		if res, ok := manifest.Resolve(c.CallName); ok {
-			fact.ResolutionSource = report.ResolutionSourceModulesJSON
-			fact.VersionResolved = res.Version
-			if res.Commit != "" {
-				fact.RefResolved = res.Commit
-			}
-		}
-		facts = append(facts, fact)
+		fmt.Fprintf(os.Stderr, ". Results: %s/runs/%d\n", runner.UIBase, sum.RunID)
 	}
-
-	r := report.New(report.ScannerTypeModuleUsage, report.Subject{
-		Kind:      report.SubjectKindProject,
-		RepoURL:   repoURL,
-		CommitSHA: commit,
-		Branch:    branch,
-	}, facts)
-
-	return finish(r, common)
-}
-
-func runModuleRepoScan(common commonFlags, repoURL string) error {
-	if repoURL == "" {
-		return fmt.Errorf("--repo-url is required in module-repo mode")
-	}
-
-	tags, err := gittags.List(repoURL)
 	if err != nil {
 		return err
 	}
-
-	facts := make([]report.Fact, 0, len(tags))
-	for _, t := range tags {
-		facts = append(facts, report.Fact{
-			Type:      report.FactTypeVersionTag,
-			Tag:       t.Name,
-			SemVer:    t.SemVer,
-			CommitSHA: t.CommitSHA,
-		})
+	if sum.Failed > 0 {
+		return fmt.Errorf("%d of %d items failed", sum.Failed, sum.Total)
 	}
-
-	r := report.New(report.ScannerTypeModuleRepo, report.Subject{
-		Kind:    report.SubjectKindModuleRepo,
-		RepoURL: repoURL,
-	}, facts)
-
-	return finish(r, common)
+	return nil
 }
 
-// finish writes the report to --out (if set), submits it to the server
-// (unless --dry-run or no --api-url), and otherwise prints it to stdout so
-// the command is useful standalone before a server exists.
-func finish(r report.ScanReport, common commonFlags) error {
+func plan(f scanFlags) ([]scan.Target, string, error) {
+	host, _ := os.Hostname()
+	switch f.mode {
+	case "project":
+		targets, err := scan.PlanProjects(f.opts)
+		if err != nil {
+			return nil, "", err
+		}
+		if !f.skipModuleVersions {
+			targets = append(targets, scan.PlanModuleRepos(targets)...)
+		}
+		abs, _ := filepath.Abs(f.opts.Path)
+		return targets, fmt.Sprintf("%s: %s", host, abs), nil
+	case "module-repo":
+		if f.opts.RepoURL == "" {
+			return nil, "", fmt.Errorf("--repo-url is required in module-repo mode")
+		}
+		return []scan.Target{scan.ModuleRepo(f.opts.RepoURL)}, fmt.Sprintf("%s: module repo %s", host, f.opts.RepoURL), nil
+	default:
+		return nil, "", fmt.Errorf("--mode must be %q or %q, got %q", "project", "module-repo", f.mode)
+	}
+}
+
+func describe(targets []scan.Target) string {
+	projects, repos, modules := 0, map[string]bool{}, 0
+	for _, t := range targets {
+		if t.Kind == client.ItemKindModuleRepo {
+			modules++
+			continue
+		}
+		projects++
+		repos[t.RepoURL] = true
+	}
+	if projects == 0 {
+		return fmt.Sprintf("%d module repo(s) to check", modules)
+	}
+	return fmt.Sprintf("%d Terraform root(s) in %d repo(s), and %d module repo(s) to check", projects, len(repos), modules)
+}
+
+// collect builds every report locally and prints or saves them, for use
+// without a server.
+func collect(ctx context.Context, f scanFlags, targets []scan.Target) error {
+	reports, buildErr := scan.Collect(ctx, targets)
+
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(r); err != nil {
-		return fmt.Errorf("marshaling report: %w", err)
+	if err := enc.Encode(reports); err != nil {
+		return fmt.Errorf("encoding reports: %w", err)
 	}
-	data := buf.Bytes()
 
-	if common.out != "" {
-		if err := os.WriteFile(common.out, data, 0o644); err != nil {
-			return fmt.Errorf("writing report to %s: %w", common.out, err)
+	if f.out != "" {
+		if err := os.WriteFile(f.out, buf.Bytes(), 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", f.out, err)
 		}
-		fmt.Fprintf(os.Stderr, "wrote report (%d facts) to %s\n", len(r.Facts), common.out)
+		fmt.Fprintf(os.Stderr, "Wrote %d report(s) to %s\n", len(reports), f.out)
+	} else {
+		os.Stdout.Write(buf.Bytes())
 	}
-
-	if common.dryRun || common.apiURL == "" {
-		if common.out == "" {
-			os.Stdout.Write(data)
-		}
-		return nil
-	}
-
-	c := client.New(common.apiURL, common.token)
-	if err := c.SubmitScan(r); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "submitted scan (%d facts) to %s\n", len(r.Facts), common.apiURL)
-	return nil
+	return buildErr
 }

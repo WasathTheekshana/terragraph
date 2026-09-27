@@ -3,11 +3,22 @@ package web
 import "fmt"
 
 templ layout(title string, active string) {
+	@page(title, active, 0) {
+		{ children... }
+	}
+}
+
+// page is the layout with an optional refresh interval in seconds, for pages
+// showing work in progress without needing JavaScript.
+templ page(title string, active string, refresh int) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			if refresh > 0 {
+				<meta http-equiv="refresh" content={ fmt.Sprint(refresh) }/>
+			}
 			<title>{ title } · terragraph</title>
 			<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
 			<link rel="stylesheet" href={ cssURL }/>
@@ -22,6 +33,7 @@ templ layout(title string, active string) {
 					<nav class="flex h-full gap-6 text-sm font-medium">
 						@navLink("/", "Projects", active == "projects")
 						@navLink("/modules", "Modules", active == "modules")
+						@navLink("/runs", "Scans", active == "runs")
 					</nav>
 				</div>
 			</header>
@@ -155,6 +167,24 @@ templ emptyState(title string) {
 			{ children... }
 		</div>
 	</div>
+}
+
+templ progressBar(value int, total int, label string) {
+	<progress
+		value={ fmt.Sprint(value) }
+		max={ fmt.Sprint(max(total, 1)) }
+		aria-label={ label }
+		class="h-2 w-full appearance-none overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800 [&::-moz-progress-bar]:bg-indigo-500 [&::-webkit-progress-bar]:bg-slate-200 dark:[&::-webkit-progress-bar]:bg-slate-800 [&::-webkit-progress-value]:bg-indigo-500"
+	></progress>
+}
+
+// projectName shows a project's repo, with its path inside the repo when it
+// isn't the root.
+templ projectName(repoURL string, path string, href templ.SafeURL) {
+	<a href={ href } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ repoURL }</a>
+	if p := projectPath(path); p != "" {
+		<div class="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">{ p }</div>
+	}
 }
 
 templ code(s string) {

@@ -21,10 +21,13 @@ const (
 )
 
 type Subject struct {
-	Kind      SubjectKind `json:"kind"`
-	RepoURL   string      `json:"repo_url"`
-	CommitSHA string      `json:"commit_sha,omitempty"`
-	Branch    string      `json:"branch,omitempty"`
+	Kind    SubjectKind `json:"kind"`
+	RepoURL string      `json:"repo_url"`
+	// Path is the Terraform root's directory inside the repo, slash-separated,
+	// "." for the repo root. Empty for module repos.
+	Path      string `json:"path,omitempty"`
+	CommitSHA string `json:"commit_sha,omitempty"`
+	Branch    string `json:"branch,omitempty"`
 }
 
 type FactType string

@@ -52,6 +52,9 @@ func TestValidateRejects(t *testing.T) {
 		{"duplicate call name", func(r *Report) { r.Facts = append(r.Facts, r.Facts[0]) }, `"vpc" is duplicated`},
 		{"missing source", func(r *Report) { r.Facts[0].Source = "" }, "facts[0].source is required"},
 		{"bad resolution source", func(r *Report) { r.Facts[0].ResolutionSource = "lockfile" }, "resolution_source"},
+		{"absolute path", func(r *Report) { r.Subject.Path = "/etc" }, "subject.path"},
+		{"escaping path", func(r *Report) { r.Subject.Path = "envs/../../x" }, "subject.path"},
+		{"backslash path", func(r *Report) { r.Subject.Path = `envs\prod` }, "subject.path"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -62,6 +65,19 @@ func TestValidateRejects(t *testing.T) {
 				t.Errorf("Validate() = %v, want error containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestProjectPath(t *testing.T) {
+	for in, want := range map[string]string{"": ".", ".": ".", "envs/prod": "envs/prod", "envs/prod/": "envs/prod", "./envs//dev": "envs/dev"} {
+		r := validUsage()
+		r.Subject.Path = in
+		if err := r.Validate(); err != nil {
+			t.Errorf("path %q: unexpected error %v", in, err)
+		}
+		if got := r.Subject.ProjectPath(); got != want {
+			t.Errorf("ProjectPath(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

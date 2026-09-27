@@ -1,16 +1,54 @@
-// Package gitinfo reads local git metadata (commit, branch, remote) so the
-// CLI can auto-fill scan report fields when a pipeline doesn't pass them
-// explicitly (e.g. via --commit/--branch/--repo-url flags).
+// Package gitinfo reads local git metadata (repo root, commit, branch,
+// remote) so scan reports can identify what was scanned.
 package gitinfo
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
+// Repo is what a scan needs to know about a git checkout.
+type Repo struct {
+	Root      string
+	RemoteURL string
+	CommitSHA string
+	Branch    string
+}
+
+// FindRoot returns the checkout containing dir by looking for .git in dir and
+// its parents. .git is a file in worktrees and submodules, so either counts.
+func FindRoot(dir string) (string, bool) {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+// Read returns the metadata of the checkout rooted at root. Fields git can't
+// provide (no origin remote, detached HEAD) are left empty.
+func Read(root string) Repo {
+	return Repo{
+		Root:      root,
+		RemoteURL: RemoteURL(root, "origin"),
+		CommitSHA: CommitSHA(root),
+		Branch:    Branch(root),
+	}
+}
+
 func run(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.Output()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
 	if err != nil {
 		return "", err
 	}

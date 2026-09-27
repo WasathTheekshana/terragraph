@@ -4,9 +4,13 @@
 package gittags
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 )
@@ -19,19 +23,58 @@ type Tag struct {
 	SemVer    string // "" if Name doesn't parse as semver
 }
 
-// List runs `git ls-remote --tags <repoURL>` and returns one Tag per ref,
-// dereferencing annotated tags (the "^{}" peeled refs) so CommitSHA always
-// points at the underlying commit rather than the tag object.
-func List(repoURL string) ([]Tag, error) {
-	out, err := exec.Command("git", "ls-remote", "--tags", repoURL).Output()
-	if err != nil {
-		return nil, fmt.Errorf("git ls-remote --tags %s: %w", repoURL, err)
-	}
+// lsRemoteTimeout bounds one remote; a hung connection shouldn't stall a scan.
+const lsRemoteTimeout = 2 * time.Minute
 
+// List runs `git ls-remote --tags <repoURL>` and returns one Tag per tag.
+// Git is never allowed to prompt for credentials: the scanner runs
+// unattended, so missing access fails with git's own message instead.
+func List(ctx context.Context, repoURL string) ([]Tag, error) {
+	ctx, cancel := context.WithTimeout(ctx, lsRemoteTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", repoURL)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
+	if os.Getenv("GIT_SSH_COMMAND") == "" {
+		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := gitError(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("git ls-remote: %s", msg)
+		}
+		return nil, fmt.Errorf("git ls-remote: %w", err)
+	}
+	return parse(string(out)), nil
+}
+
+// gitError keeps the lines of git's stderr up to the first "fatal:", which
+// carry the cause (e.g. "Permission denied (publickey)"), and drops the
+// generic advice git prints after it.
+func gitError(stderr string) string {
+	var kept []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		kept = append(kept, line)
+		if strings.HasPrefix(line, "fatal:") {
+			break
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
+// parse reads ls-remote output, dereferencing annotated tags (the "^{}"
+// peeled refs) so CommitSHA is the tagged commit, not the tag object.
+func parse(out string) []Tag {
 	byName := make(map[string]*Tag)
 	var order []string
 
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -72,5 +115,5 @@ func List(repoURL string) ([]Tag, error) {
 		}
 		tags = append(tags, t)
 	}
-	return tags, nil
+	return tags
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime"
@@ -30,6 +31,13 @@ type Store interface {
 	ListModules(ctx context.Context) ([]store.Module, error)
 	GetModule(ctx context.Context, id int64) (store.Module, error)
 	ModuleConsumers(ctx context.Context, moduleID int64) ([]store.Usage, error)
+	CreateRun(ctx context.Context, label, idempotencyKey string, items []store.NewRunItem) (store.Run, []store.RunItem, error)
+	IngestRunItem(ctx context.Context, runID, itemID int64, in store.Scan) (store.IngestResult, error)
+	FailRunItem(ctx context.Context, runID, itemID int64, msg string) error
+	FinishRun(ctx context.Context, runID int64, status string) (store.Run, error)
+	ListRuns(ctx context.Context, limit int) ([]store.Run, error)
+	GetRun(ctx context.Context, id int64) (store.Run, error)
+	RunItems(ctx context.Context, runID int64) ([]store.RunItem, error)
 	Ping(ctx context.Context) error
 }
 
@@ -63,6 +71,12 @@ func NewHandler(s Store, cfg Config, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /api/v1/modules", h.listModules)
 	mux.HandleFunc("GET /api/v1/modules/{id}", h.getModule)
 	mux.HandleFunc("GET /api/v1/modules/{id}/consumers", h.moduleConsumers)
+	mux.Handle("POST /api/v1/runs", h.requireToken(http.HandlerFunc(h.createRun)))
+	mux.HandleFunc("GET /api/v1/runs", h.listRuns)
+	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
+	mux.Handle("POST /api/v1/runs/{id}/items/{item}/scan", h.requireToken(http.HandlerFunc(h.submitRunItem)))
+	mux.Handle("POST /api/v1/runs/{id}/items/{item}/fail", h.requireToken(http.HandlerFunc(h.failRunItem)))
+	mux.Handle("POST /api/v1/runs/{id}/finish", h.requireToken(http.HandlerFunc(h.finishRun)))
 	// Without this, unknown API paths would fall through to the UI and get HTML.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -90,45 +104,75 @@ func (h *handler) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) createScan(w http.ResponseWriter, r *http.Request) {
-	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
-		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+	scan, ok := h.readScan(w, r)
+	if !ok {
 		return
 	}
-
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxReportBytes))
-	if err != nil {
-		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			writeError(w, http.StatusRequestEntityTooLarge, "scan report exceeds 10 MiB")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "reading request body failed")
-		return
-	}
-
-	var rep report.Report
-	if err := json.Unmarshal(raw, &rep); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-		return
-	}
-	if err := rep.Validate(); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, errorBody{
-			Error:   "invalid scan report",
-			Details: strings.Split(err.Error(), "\n"),
-		})
-		return
-	}
-
-	tracked := slices.Contains(h.cfg.TrackedBranches, rep.Subject.Branch)
-	res, err := h.store.Ingest(r.Context(), store.Scan{Report: rep, Raw: raw, Tracked: tracked})
+	res, err := h.store.Ingest(r.Context(), scan)
 	if err != nil {
 		h.internalError(w, r, "ingesting scan", err)
 		return
 	}
-
-	h.log.InfoContext(r.Context(), "scan ingested",
-		"scan_id", res.ScanID, "applied", res.Applied, "scanner_type", rep.ScannerType,
-		"repo_url", rep.Subject.RepoURL, "branch", rep.Subject.Branch, "facts", len(rep.Facts))
+	h.logIngest(r, scan, res)
 	writeJSON(w, http.StatusCreated, res)
+}
+
+// readJSON decodes a JSON body of at most limit bytes into v, answering the
+// request itself when that fails.
+func readJSON(w http.ResponseWriter, r *http.Request, limit int64, v any) ([]byte, bool) {
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return nil, false
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("request body exceeds %d MiB", limit>>20))
+			return nil, false
+		}
+		writeError(w, http.StatusBadRequest, "reading request body failed")
+		return nil, false
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return nil, false
+	}
+	return raw, true
+}
+
+// readScan reads and validates a scan report from the request body.
+func (h *handler) readScan(w http.ResponseWriter, r *http.Request) (store.Scan, bool) {
+	var rep report.Report
+	raw, ok := readJSON(w, r, maxReportBytes, &rep)
+	if !ok {
+		return store.Scan{}, false
+	}
+	if err := rep.Validate(); err != nil {
+		writeInvalid(w, "invalid scan report", err)
+		return store.Scan{}, false
+	}
+	return store.Scan{Report: rep, Raw: raw, Tracked: h.tracked(rep.Subject)}, true
+}
+
+// tracked reports whether a scan should become its project's current state.
+// Folders outside git (identified by a file:// URL) have no branches, so
+// only git repos are held to the tracked-branch list.
+func (h *handler) tracked(s report.Subject) bool {
+	if strings.HasPrefix(strings.ToLower(s.RepoURL), "file://") {
+		return true
+	}
+	return slices.Contains(h.cfg.TrackedBranches, s.Branch)
+}
+
+func (h *handler) logIngest(r *http.Request, scan store.Scan, res store.IngestResult) {
+	rep := scan.Report
+	h.log.InfoContext(r.Context(), "scan ingested",
+		"scan_id", res.ScanID, "applied", res.Applied, "duplicate", res.Duplicate, "scanner_type", rep.ScannerType,
+		"repo_url", rep.Subject.RepoURL, "path", rep.Subject.ProjectPath(), "branch", rep.Subject.Branch, "facts", len(rep.Facts))
+}
+
+func writeInvalid(w http.ResponseWriter, msg string, err error) {
+	writeJSON(w, http.StatusUnprocessableEntity, errorBody{Error: msg, Details: strings.Split(err.Error(), "\n")})
 }
 
 func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {

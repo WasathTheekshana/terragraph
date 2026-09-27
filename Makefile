@@ -11,7 +11,6 @@ TERRAGRAPH_TEST_DATABASE_URL ?= postgres://terragraph:terragraph@localhost:5432/
 export TERRAGRAPH_API_URL TERRAGRAPH_INGEST_TOKEN TERRAGRAPH_TOKEN
 
 MODULE_REPO ?= https://github.com/terraform-aws-modules/terraform-aws-vpc.git
-BRANCH      ?= main
 
 TAILWIND_VERSION := 4.3.3
 ifeq ($(OS),Windows_NT)
@@ -45,7 +44,7 @@ help:
 	$(info make build         build scanner/terragraph$(EXE))
 	$(info make scan-sample   scan the bundled sample project)
 	$(info make scan-module   list a module repo's versions (MODULE_REPO=url to change it))
-	$(info make scan PROJECT=path/to/terraform [BRANCH=main]   scan your own project)
+	$(info make scan DIR=path  scan a repo or a folder of repos (optional: BRANCH=main EXCLUDE=a,b CONCURRENCY=4))
 	$(info Queries:)
 	$(info make projects      list projects)
 	$(info make modules       list modules)
@@ -73,14 +72,14 @@ build:
 	go build -C scanner -o terragraph$(EXE) ./cmd/terragraph
 
 scan-sample:
-	$(SCANNER) scan --mode project --path testdata/sample-project --repo-url https://github.com/example/app.git --branch $(BRANCH)
+	$(SCANNER) scan --path testdata/sample-project --repo-url https://github.com/example/app.git --branch main --skip-module-versions
 
 scan-module:
 	$(SCANNER) scan --mode module-repo --repo-url $(MODULE_REPO)
 
 scan:
-	$(if $(PROJECT),,$(error PROJECT is required, e.g. make scan PROJECT=path/to/terraform))
-	$(SCANNER) scan --mode project --path $(abspath $(PROJECT)) --branch $(BRANCH)
+	$(if $(DIR),,$(error DIR is required, e.g. make scan DIR=path/to/repos))
+	$(SCANNER) scan --path $(abspath $(DIR))$(if $(BRANCH), --branch $(BRANCH))$(if $(EXCLUDE), --exclude $(EXCLUDE))$(if $(CONCURRENCY), --concurrency $(CONCURRENCY))
 
 projects:
 	curl -s $(TERRAGRAPH_API_URL)/api/v1/projects

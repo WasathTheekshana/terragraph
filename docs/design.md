@@ -52,20 +52,24 @@ The web UI is rendered by the server itself (Go, [templ](https://templ.guide), T
 JavaScript), reading the same store as the API, so the whole platform is one binary and one
 container.
 
-Module repos (the 10, later 100s, of custom modules) are scanned the same way, a
-`terragraph scan --mode module-repo` job on their own pipeline (or a scheduled job hitting
-their git remotes) reports available tags/semver versions, so the server always knows
-"latest" per module without projects needing to know it.
+The scanner takes any path: one repo, a folder inside one, or a folder of many repos at any
+depth. It finds every Terraform root under it, and lists the tags of every git repo those roots'
+modules come from (`git ls-remote`, no clone), so one scan covers projects and module repos
+alike. A module repo's own pipeline can also run `terragraph scan --mode module-repo` so the
+server learns about a release as soon as it's tagged.
 
 ## 4. Core entities
 
 - **Organization**: top-level tenant (single-org is fine for v1, but model it now so
   multi-tenant isn't a rewrite).
-- **Project**: a Terraform root repo that consumes modules (the ~100s of "20 projects").
+- **Project**: one Terraform root: a repo plus the root's path inside it, so a repo with
+  `envs/dev` and `envs/prod` is two projects.
 - **ModuleRepo**: a custom module's source repo (the ~10, growing to ~100s).
 - **ModuleVersion**: a git tag/ref on a ModuleRepo, resolved to semver where possible.
 - **Scan**: one report submitted by the CLI: `{project/module_repo, commit, branch, timestamp, scanner_type, facts}`.
 - **ModuleUsage (edge)**: derived from the latest scan of a Project: `(project, module_repo, pinned_ref, resolved_version, source_type)`.
+- **Run**: one scanner invocation: the items it planned (projects and module repos) and how
+  each went, so progress is visible while it works.
 
 Scans are append-only (history/audit trail, like Sonar's analysis history). ModuleUsage is a
 materialized "current state" view computed from the latest scan per project, refreshed on
@@ -83,6 +87,7 @@ future scanner types don't require a schema migration on the ingest side.
   "subject": {
     "kind": "project",
     "repo_url": "git@github.com:org/project-a.git",
+    "path": "envs/prod",
     "commit_sha": "a1b2c3d",
     "branch": "main"
   },
@@ -113,6 +118,8 @@ future scanner types don't require a schema migration on the ingest side.
 }
 ```
 
+- `subject.path`: the root's directory inside the repo, slash-separated; `.` or absent for the
+  repo root. Folders outside git have a `file://host/path` `repo_url`.
 - `ref_declared`: the `?ref=` of a git source, or the `version` constraint of a registry source.
 - `ref_resolved`: the exact commit when the module was installed as a git clone, otherwise the same as `ref_declared`.
 - `version_resolved`: the exact version Terraform selected for a registry module. Only present after `terraform init`/`get`.
@@ -141,7 +148,7 @@ Surface this in the UI so unresolved data is distinguishable from verified data.
 
 The server repo's migrations are authoritative; in outline:
 
-- `projects`: one per project repo, keyed by normalized repo URL.
+- `projects`: one per Terraform root, keyed by normalized repo URL and path.
 - `modules`: one per versioned unit, keyed by normalized source: a git repo (subdirectory and
   ref stripped) or a registry address. Created by whichever scan mentions it first, so project
   and module repo scans meet on the same row however each writes the URL.
@@ -149,10 +156,12 @@ The server repo's migrations are authoritative; in outline:
 - `scans`: every report as submitted (append-only history and audit).
 - `module_usages`: each project's current module calls, replaced as a whole when a scan is
   applied, with the exact version pinned.
+- `runs`, `run_items`: each scanner run and its planned items with their status (pending, done,
+  failed), error, and the scan each produced.
 
 A project scan is applied (becomes current state) only if its branch is tracked (`main`,
-`master` by default) and it isn't older than the scan it replaces. Everything else is kept in
-history only.
+`master` by default; folders outside git always are) and it isn't older than the scan it
+replaces. Everything else is kept in history only.
 
 "Latest" is the highest stable tag; "outdated" and "majors behind" compare it with the pinned
 version at query time, so nothing derived is stored.
@@ -167,21 +176,44 @@ version at query time, so nothing derived is stored.
 - `GET /api/v1/modules`, `GET /api/v1/modules/{id}`: modules with latest version and consumer
   counts.
 - `GET /api/v1/modules/{id}/consumers`: every project calling a module (the blast radius).
+- `POST /api/v1/runs`, `POST /api/v1/runs/{id}/items/{item}/scan|fail`,
+  `POST /api/v1/runs/{id}/finish`, `GET /api/v1/runs[/{id}]`: runs, used by the scanner.
 - `GET /healthz`, `GET /readyz`: liveness and readiness.
 
-The web UI pages (`/`, `/projects/{id}`, `/modules`, `/modules/{id}`) show the same data. The
-graph endpoint for the v2 graph view isn't built yet.
+The web UI pages (`/`, `/projects/{id}`, `/modules`, `/modules/{id}`, `/runs`, `/runs/{id}`)
+show the same data. The graph endpoint for the v2 graph view isn't built yet.
+
+### Reliability of scan runs
+
+Every run endpoint is idempotent: creating a run honors an `Idempotency-Key`, and an item's
+report is ingested and the item marked done in one transaction, so resubmitting a done item
+returns its first result instead of recording it again. The scanner can therefore retry any
+network or server failure (exponential backoff with jitter) without risk. A run the scanner
+never closes shows as stalled after 10 minutes without progress.
+
+There is no message broker: the data being scanned lives on the scanner's machine, and Postgres
+commits each item before it's acknowledged. A broker would add a service to run without adding
+durability, because if the scanner's machine goes away, nothing else could finish its scan. If
+the server later clones and scans repos itself, that work needs a durable job queue; Postgres
+(`FOR UPDATE SKIP LOCKED`) would be the first choice before a separate broker.
 
 ## 8. Scanner CLI (Go)
 
-- Single static binary: `terragraph scan --mode project|module-repo --api-url ... --token ...`.
+- Single static binary: `terragraph scan --path <anything> --api-url ... --token ...`.
+- Discovery: walks the path for directories with `.tf`/`.tf.json` files, skipping hidden
+  directories, `node_modules`, `examples`, and `--exclude` patterns. Directories another root
+  uses as a local module aren't roots. Each root's repo is found by looking for `.git` in it and
+  its parents, so a folder inside a repo keeps the repo's identity.
+- Runs: the scanner registers every planned item, then processes them in parallel
+  (`--concurrency`), reporting each as done or failed; one failure doesn't stop the rest.
 - HCL parsing via `hashicorp/hcl/v2` + `hashicorp/terraform-config-inspect` (the same library
   Terraform's own tooling uses to enumerate `module` blocks without a full `terraform init`).
 - If `.terraform/modules/modules.json` is present (project already initialized in the
   pipeline), use it for `ref_resolved` and `version_resolved`; otherwise fall back to the
   parsed literal `ref_declared`, tagging `resolution_source` accordingly.
-- `--mode module-repo`: shells out to `git ls-remote --tags` (no clone needed) to enumerate
-  tags, parses semver.
+- Module versions: `git ls-remote --tags` (no clone needed) for every git module source found,
+  or for one repo with `--mode module-repo`. Git runs non-interactively, so missing access fails
+  with git's message instead of hanging on a prompt.
 - Exits non-zero on failure. It's a read-only observability tool, not a policy gate (that's a
   v3 feature, see §10), so pipelines that must never be blocked by it can mark the step
   `continue-on-error`.

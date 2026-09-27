@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/a-h/templ"
 
@@ -46,15 +47,25 @@ type Store interface {
 	ListModules(ctx context.Context) ([]store.Module, error)
 	GetModule(ctx context.Context, id int64) (store.Module, error)
 	ModuleConsumers(ctx context.Context, moduleID int64) ([]store.Usage, error)
+	ListRuns(ctx context.Context, limit int) ([]store.Run, error)
+	GetRun(ctx context.Context, id int64) (store.Run, error)
+	RunItems(ctx context.Context, runID int64) ([]store.RunItem, error)
 }
+
+const runsShown = 50
 
 type handler struct {
 	store Store
 	log   *slog.Logger
+	now   func() time.Time
 }
 
 func NewHandler(s Store, log *slog.Logger) http.Handler {
-	h := &handler{store: s, log: log}
+	return newHandler(s, log, time.Now)
+}
+
+func newHandler(s Store, log *slog.Logger, now func() time.Time) http.Handler {
+	h := &handler{store: s, log: log, now: now}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", staticHandler())
@@ -62,6 +73,8 @@ func NewHandler(s Store, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /projects/{id}", h.project)
 	mux.HandleFunc("GET /modules", h.modules)
 	mux.HandleFunc("GET /modules/{id}", h.module)
+	mux.HandleFunc("GET /runs", h.runs)
+	mux.HandleFunc("GET /runs/{id}", h.run)
 	mux.HandleFunc("/", h.notFound)
 
 	return securityHeaders(mux)
@@ -123,6 +136,34 @@ func (h *handler) module(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, r, http.StatusOK, modulePage(m, consumers))
+}
+
+func (h *handler) runs(w http.ResponseWriter, r *http.Request) {
+	runs, err := h.store.ListRuns(r.Context(), runsShown)
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
+	h.render(w, r, http.StatusOK, runsPage(runs, h.now()))
+}
+
+func (h *handler) run(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		h.notFound(w, r)
+		return
+	}
+	run, err := h.store.GetRun(r.Context(), id)
+	if err != nil {
+		h.lookupError(w, r, err)
+		return
+	}
+	items, err := h.store.RunItems(r.Context(), id)
+	if err != nil {
+		h.lookupError(w, r, err)
+		return
+	}
+	h.render(w, r, http.StatusOK, runPage(run, items, h.now()))
 }
 
 func pathID(r *http.Request) (int64, bool) {

@@ -21,6 +21,12 @@ type fakeStore struct {
 	ingestErr error
 	pingErr   error
 	usages    map[int64][]store.Usage
+
+	runErr    error
+	runKey    string
+	runItems  []store.NewRunItem
+	failMsg   string
+	listLimit int
 }
 
 func (f *fakeStore) Ingest(_ context.Context, in store.Scan) (store.IngestResult, error) {
@@ -64,6 +70,54 @@ func (f *fakeStore) GetModule(_ context.Context, id int64) (store.Module, error)
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
+
+func (f *fakeStore) CreateRun(_ context.Context, label, key string, items []store.NewRunItem) (store.Run, []store.RunItem, error) {
+	f.runKey, f.runItems = key, items
+	out := make([]store.RunItem, len(items))
+	for i, it := range items {
+		out[i] = store.RunItem{ID: int64(i + 1), Kind: it.Kind, RepoURL: it.RepoURL, Path: it.Path, Status: store.ItemPending}
+	}
+	return store.Run{ID: 1, Label: label, Status: store.RunRunning, Total: len(items)}, out, nil
+}
+
+func (f *fakeStore) IngestRunItem(_ context.Context, runID, itemID int64, in store.Scan) (store.IngestResult, error) {
+	if f.runErr != nil {
+		return store.IngestResult{}, f.runErr
+	}
+	if runID != 1 || itemID != 1 {
+		return store.IngestResult{}, store.ErrNotFound
+	}
+	f.ingested = append(f.ingested, in)
+	return store.IngestResult{ScanID: 9, Applied: in.Tracked, Duplicate: len(f.ingested) > 1}, nil
+}
+
+func (f *fakeStore) FailRunItem(_ context.Context, runID, itemID int64, msg string) error {
+	f.failMsg = msg
+	return f.runErr
+}
+
+func (f *fakeStore) FinishRun(_ context.Context, runID int64, status string) (store.Run, error) {
+	if f.runErr != nil {
+		return store.Run{}, f.runErr
+	}
+	return store.Run{ID: runID, Status: status}, nil
+}
+
+func (f *fakeStore) ListRuns(_ context.Context, limit int) ([]store.Run, error) {
+	f.listLimit = limit
+	return nil, nil
+}
+
+func (f *fakeStore) GetRun(_ context.Context, id int64) (store.Run, error) {
+	if id != 1 {
+		return store.Run{}, store.ErrNotFound
+	}
+	return store.Run{ID: 1, Status: store.RunRunning}, nil
+}
+
+func (f *fakeStore) RunItems(context.Context, int64) ([]store.RunItem, error) {
+	return []store.RunItem{{ID: 1, Kind: store.ItemKindProject}}, nil
+}
 
 func newTestServer(t *testing.T, fs *fakeStore) *httptest.Server {
 	t.Helper()
@@ -149,6 +203,16 @@ func TestCreateScanUntrackedBranch(t *testing.T) {
 	resp, body := postScan(t, srv.URL, "Bearer "+token, "application/json", strings.Replace(validScan, "%s", "feature/x", 1))
 	if resp.StatusCode != http.StatusCreated || body["applied"] != false {
 		t.Errorf("status = %d, body = %v; want 201 with applied false", resp.StatusCode, body)
+	}
+}
+
+func TestFoldersOutsideGitAreAlwaysTracked(t *testing.T) {
+	fs := &fakeStore{}
+	srv := newTestServer(t, fs)
+	scan := strings.Replace(strings.Replace(validScan, "%s", "", 1), "git@github.com:org/p.git", "file://laptop/C:/work/infra", 1)
+	resp, body := postScan(t, srv.URL, "Bearer "+token, "application/json", scan)
+	if resp.StatusCode != http.StatusCreated || body["applied"] != true {
+		t.Errorf("status = %d, body = %v; want a branchless local folder applied", resp.StatusCode, body)
 	}
 }
 

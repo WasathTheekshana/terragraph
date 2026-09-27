@@ -28,11 +28,20 @@ jobs:
       - name: Build CLI
         run: go build -o "$RUNNER_TEMP/terragraph" ./cmd/terragraph
 
+      - name: Discover every root under a folder
+        run: |
+          "$RUNNER_TEMP/terragraph" scan --path testdata --skip-module-versions --out all-report.json
+          jq -e '[.[].subject.path] | sort == ["scanner/testdata/public-modules", "scanner/testdata/sample-project"]' all-report.json > /dev/null || {
+            echo "::error::Expected both testdata projects, identified by their path in the repo"
+            jq '[.[].subject.path]' all-report.json
+            exit 1
+          }
+
       - name: Scan sample project without init
         run: |
-          "$RUNNER_TEMP/terragraph" scan --mode project --path testdata/sample-project --out sample-report.json
+          "$RUNNER_TEMP/terragraph" scan --path testdata/sample-project --skip-module-versions --out sample-report.json
           cat sample-report.json
-          jq -e '(.facts | length) == 5 and all(.facts[]; .resolution_source == "source-parse")' sample-report.json > /dev/null || {
+          jq -e 'length == 1 and (.[0].facts | length) == 5 and all(.[0].facts[]; .resolution_source == "source-parse")' sample-report.json > /dev/null || {
             echo "::error::Expected 5 module calls, all resolved from source"
             exit 1
           }
@@ -40,22 +49,29 @@ jobs:
       - name: Scan public modules after terraform get
         run: |
           terraform -chdir=testdata/public-modules get
-          "$RUNNER_TEMP/terragraph" scan --mode project --path testdata/public-modules --out public-report.json
+          "$RUNNER_TEMP/terragraph" scan --path testdata/public-modules --skip-module-versions --out public-report.json
           cat public-report.json
-          jq -e '(.facts | length) == 2 and all(.facts[]; .resolution_source == "modules-json" and (.ref_resolved | test("^[0-9a-f]{40}$")))' public-report.json > /dev/null || {
+          jq -e '(.[0].facts | length) == 2 and all(.[0].facts[]; .resolution_source == "modules-json" and (.ref_resolved | test("^[0-9a-f]{40}$")))' public-report.json > /dev/null || {
             echo "::error::Expected 2 module calls, all resolved to exact commits"
             exit 1
           }
-          jq -e 'any(.facts[]; .call_name == "s3_bucket" and (.version_resolved // "" | startswith("4.")))' public-report.json > /dev/null || {
+          jq -e 'any(.[0].facts[]; .call_name == "s3_bucket" and (.version_resolved // "" | startswith("4.")))' public-report.json > /dev/null || {
             echo "::error::Expected s3_bucket to report the exact 4.x version terraform selected"
             exit 1
           }
 
-      - name: Scan module repo
+      - name: List module versions found in a project
+        run: |
+          "$RUNNER_TEMP/terragraph" scan --path testdata/public-modules --out modules-report.json
+          jq -e 'any(.[]; .scanner_type == "module-repo" and .subject.repo_url == "https://github.com/terraform-aws-modules/terraform-aws-vpc.git" and any(.facts[]; .tag == "v5.1.0"))' modules-report.json > /dev/null || {
+            echo "::error::Expected the vpc module's versions to be listed from its source"
+            exit 1
+          }
+
+      - name: Scan a module repo directly
         run: |
           "$RUNNER_TEMP/terragraph" scan --mode module-repo --repo-url https://github.com/terraform-aws-modules/terraform-aws-vpc.git --out module-report.json
-          jq '.facts | length' module-report.json
-          jq -e 'any(.facts[]; .tag == "v5.1.0" and .semver == "5.1.0")' module-report.json > /dev/null || {
+          jq -e 'any(.[0].facts[]; .tag == "v5.1.0" and .semver == "5.1.0")' module-report.json > /dev/null || {
             echo "::error::Expected tag v5.1.0 in terraform-aws-vpc"
             exit 1
           }

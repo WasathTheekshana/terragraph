@@ -1,12 +1,12 @@
 # terragraph
 
 Tracks which Terraform projects use which modules, at which versions, and how far behind the
-latest release they are. A scanner runs in each project's and module repo's pipeline and
-reports to a self-hosted server.
+latest release they are. A scanner, run on your machine or in pipelines, finds every Terraform
+root under a folder and reports to a self-hosted server with a web UI.
 
 | folder | |
 |---|---|
-| [scanner/](scanner/README.md) | CLI that scans a Terraform project or module repo and submits a report |
+| [scanner/](scanner/README.md) | CLI that scans a repo or a folder of many repos and submits what it finds |
 | [server/](server/README.md) | web UI, API, and Postgres store that ingests reports and answers usage queries |
 | [docs/](docs/design.md) | platform design |
 
@@ -16,13 +16,15 @@ Needs Docker, Go, and GNU make (on Windows: `choco install make` or `winget inst
 Run everything from the repo root.
 
 ```sh
-cp .env.example .env     # PowerShell: Copy-Item .env.example .env
-make up                  # start Postgres and the server in the background
-make scan-module         # tell the server about terraform-aws-vpc's released versions
-make scan-sample         # scan the bundled sample project
+cp .env.example .env              # PowerShell: Copy-Item .env.example .env
+make up                           # start Postgres and the server in the background
+make scan DIR=path/to/your/repos  # a repo, a folder inside one, or a folder of many repos
 ```
 
-Then open `http://localhost:8080` to see the result in the web UI.
+Open `http://localhost:8080`: the Scans page shows the scan's progress live, and Projects and
+Modules show what it found. The scan also lists the released versions of every git repo your
+modules come from, using your normal git access, so private module repos work if you can clone
+them.
 
 `make` on its own lists every target. The common ones:
 
@@ -31,8 +33,9 @@ Then open `http://localhost:8080` to see the result in the web UI.
 | `make up` / `make down` | start / stop the local stack |
 | `make reset` | stop the stack and delete its data |
 | `make logs` | follow the server logs |
-| `make scan PROJECT=path/to/terraform` | scan one of your own projects (`BRANCH=main` by default) |
-| `make scan-module MODULE_REPO=url` | list one of your module repos' versions |
+| `make scan DIR=path` | scan everything under a folder; optional `BRANCH=`, `EXCLUDE=a,b`, `CONCURRENCY=` |
+| `make scan-sample` | scan the bundled sample project |
+| `make scan-module MODULE_REPO=url` | list one module repo's versions |
 | `make projects` / `make modules` | query the API from the terminal |
 | `make generate` | regenerate the web UI's templ code and CSS after editing it |
 | `make test` / `make test-db` | tests; `test-db` also runs the database tests against `make up`'s Postgres |

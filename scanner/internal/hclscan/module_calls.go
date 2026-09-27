@@ -3,10 +3,12 @@
 package hclscan
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 )
@@ -32,7 +34,7 @@ var refPattern = regexp.MustCompile(`[?&]ref=([^&\s]+)`)
 func Scan(dir string) ([]ModuleCall, error) {
 	module, diags := tfconfig.LoadModule(dir)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("parsing terraform config in %s: %w", dir, diags.Err())
+		return nil, diagError(dir, diags)
 	}
 
 	calls := make([]ModuleCall, 0, len(module.ModuleCalls))
@@ -58,6 +60,23 @@ func Scan(dir string) ([]ModuleCall, error) {
 		return calls[i].Line < calls[j].Line
 	})
 	return calls, nil
+}
+
+// diagError describes the parse errors as "file:line: summary", with files
+// relative to dir; the caller already knows which directory it scanned.
+func diagError(dir string, diags tfconfig.Diagnostics) error {
+	var msgs []string
+	for _, d := range diags {
+		if d.Severity != tfconfig.DiagError {
+			continue
+		}
+		msg := d.Summary
+		if d.Pos != nil && d.Pos.Filename != "" {
+			msg = fmt.Sprintf("%s:%d: %s", relPath(dir, d.Pos.Filename), d.Pos.Line, d.Summary)
+		}
+		msgs = append(msgs, msg)
+	}
+	return errors.New(strings.Join(msgs, "; "))
 }
 
 // relPath keeps reported paths identical across runners and OSes.

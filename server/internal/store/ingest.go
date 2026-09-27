@@ -30,32 +30,19 @@ type IngestResult struct {
 	// Applied is false when the scan was only recorded in history: it came
 	// from an untracked branch or is older than the current state.
 	Applied bool `json:"applied"`
+	// Duplicate is true when a run item had already been submitted; the
+	// result is the original submission's.
+	Duplicate bool `json:"duplicate,omitempty"`
 }
 
 func (s *Store) Ingest(ctx context.Context, in Scan) (IngestResult, error) {
-	if len(in.Raw) == 0 {
-		raw, err := json.Marshal(in.Report)
-		if err != nil {
-			return IngestResult{}, err
-		}
-		in.Raw = raw
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return IngestResult{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	var res IngestResult
-	switch in.Report.ScannerType {
-	case report.ScannerTypeModuleUsage:
-		res, err = ingestModuleUsage(ctx, tx, in)
-	case report.ScannerTypeModuleRepo:
-		res, err = ingestModuleRepo(ctx, tx, in)
-	default:
-		err = fmt.Errorf("unsupported scanner type %q", in.Report.ScannerType)
-	}
+	res, err := ingest(ctx, tx, in)
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -65,6 +52,24 @@ func (s *Store) Ingest(ctx context.Context, in Scan) (IngestResult, error) {
 	return res, nil
 }
 
+func ingest(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, error) {
+	if len(in.Raw) == 0 {
+		raw, err := json.Marshal(in.Report)
+		if err != nil {
+			return IngestResult{}, err
+		}
+		in.Raw = raw
+	}
+	switch in.Report.ScannerType {
+	case report.ScannerTypeModuleUsage:
+		return ingestModuleUsage(ctx, tx, in)
+	case report.ScannerTypeModuleRepo:
+		return ingestModuleRepo(ctx, tx, in)
+	default:
+		return IngestResult{}, fmt.Errorf("unsupported scanner type %q", in.Report.ScannerType)
+	}
+}
+
 func ingestModuleUsage(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, error) {
 	r := in.Report
 
@@ -72,10 +77,10 @@ func ingestModuleUsage(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, e
 	var projectID int64
 	var lastScanAt *time.Time
 	err := tx.QueryRow(ctx, `
-		INSERT INTO projects (repo_key, repo_url) VALUES ($1, $2)
-		ON CONFLICT (repo_key) DO UPDATE SET repo_url = EXCLUDED.repo_url
+		INSERT INTO projects (repo_key, path, repo_url) VALUES ($1, $2, $3)
+		ON CONFLICT (repo_key, path) DO UPDATE SET repo_url = EXCLUDED.repo_url
 		RETURNING id, last_scan_at`,
-		source.RepoKey(r.Subject.RepoURL), r.Subject.RepoURL,
+		source.RepoKey(r.Subject.RepoURL), r.Subject.ProjectPath(), r.Subject.RepoURL,
 	).Scan(&projectID, &lastScanAt)
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("upserting project: %w", err)

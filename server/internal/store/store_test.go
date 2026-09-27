@@ -20,6 +20,12 @@ import (
 // TERRAGRAPH_TEST_DATABASE_URL, dropped when the test ends.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
+	return newTestStoreAt(t, 0)
+}
+
+// newTestStoreAt is newTestStore migrated only up to version (0 for all).
+func newTestStoreAt(t *testing.T, version int64) *Store {
+	t.Helper()
 	url := os.Getenv("TERRAGRAPH_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TERRAGRAPH_TEST_DATABASE_URL is not set")
@@ -64,10 +70,41 @@ func newTestStore(t *testing.T) *Store {
 	t.Cleanup(pool.Close)
 
 	s := New(pool)
-	if err := s.Migrate(ctx); err != nil {
+	if err := s.migrateTo(ctx, version); err != nil {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// An existing install upgrading to multi-root projects must keep its data.
+func TestMigrationToMultiRootKeepsProjects(t *testing.T) {
+	s := newTestStoreAt(t, 1)
+	ctx := context.Background()
+	old := projectScan("https://github.com/org/app.git", "main", t0,
+		report.Fact{CallName: "vpc", Source: "git::https://github.com/org/vpc.git?ref=v1.0.0", RefDeclared: "v1.0.0"})
+	var id int64
+	if err := s.pool.QueryRow(ctx, `INSERT INTO projects (repo_key, repo_url) VALUES ('github.com/org/app', $1) RETURNING id`,
+		old.Subject.RepoURL).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.GetProject(ctx, id)
+	if err != nil || p.Path != "." {
+		t.Fatalf("existing project after upgrade = %+v, %v; want it kept at the repo root", p, err)
+	}
+
+	// A scan of the repo root lands on the existing project; another root is new.
+	mustIngest(t, s, old, true)
+	sub := old
+	sub.Subject.Path = "envs/prod"
+	mustIngest(t, s, sub, true)
+	projects, err := s.ListProjects(ctx)
+	if err != nil || len(projects) != 2 || projects[0].ID != id || projects[0].ModuleCalls != 1 {
+		t.Errorf("projects after upgrade = %+v, %v", projects, err)
+	}
 }
 
 var t0 = time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
@@ -324,6 +361,191 @@ func TestNotFound(t *testing.T) {
 	}
 	if _, err := s.GetModule(ctx, 999); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetModule(999) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRootsInOneRepoAreSeparateProjects(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const repo = "https://github.com/org/infra.git"
+	vpc := report.Fact{CallName: "vpc", Source: "git::https://github.com/org/vpc.git?ref=v1.0.0", RefDeclared: "v1.0.0"}
+
+	for _, path := range []string{"envs/dev", "envs/prod", ""} {
+		r := projectScan(repo, "main", t0, vpc)
+		r.Subject.Path = path
+		mustIngest(t, s, r, true)
+	}
+	projects, err := s.ListProjects(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, p := range projects {
+		paths = append(paths, p.Path)
+	}
+	if !reflect.DeepEqual(paths, []string{".", "envs/dev", "envs/prod"}) {
+		t.Errorf("project paths = %v, want one project per root", paths)
+	}
+}
+
+func newRun(t *testing.T, s *Store, items ...NewRunItem) (Run, []RunItem) {
+	t.Helper()
+	run, got, err := s.CreateRun(context.Background(), "test run", "", items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run, got
+}
+
+func TestRunLifecycle(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const projRepo, modRepo = "https://github.com/org/app.git", "https://github.com/org/vpc.git"
+
+	run, items := newRun(t, s,
+		NewRunItem{Kind: ItemKindProject, RepoURL: projRepo, Path: "envs/prod"},
+		NewRunItem{Kind: ItemKindModuleRepo, RepoURL: modRepo},
+		NewRunItem{Kind: ItemKindModuleRepo, RepoURL: "git@github.com:org/private.git"},
+	)
+	if run.Status != RunRunning || run.Total != 3 || run.Pending != 3 {
+		t.Fatalf("new run = %+v", run)
+	}
+	byRepo := map[string]RunItem{}
+	for _, it := range items {
+		byRepo[it.RepoURL] = it
+	}
+
+	p := projectScan(projRepo, "main", t0, report.Fact{CallName: "vpc", Source: "git::" + modRepo + "?ref=v1.0.0", RefDeclared: "v1.0.0"})
+	p.Subject.Path = "envs/prod"
+	res, err := s.IngestRunItem(ctx, run.ID, byRepo[projRepo].ID, Scan{Report: p, Tracked: true})
+	if err != nil || !res.Applied || res.Duplicate {
+		t.Fatalf("project item: %+v, %v", res, err)
+	}
+	if _, err := s.IngestRunItem(ctx, run.ID, byRepo[modRepo].ID, Scan{Report: repoScan(modRepo, t0, "v1.0.0", "v2.0.0")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailRunItem(ctx, run.ID, byRepo["git@github.com:org/private.git"].ID, "permission denied"); err != nil {
+		t.Fatal(err)
+	}
+
+	run, err = s.FinishRun(ctx, run.ID, RunFinished)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != RunFinished || run.FinishedAt == nil || run.Done != 2 || run.Failed != 1 || run.Pending != 0 {
+		t.Errorf("finished run = %+v", run)
+	}
+
+	items, err = s.RunItems(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items[0].Status != ItemFailed || items[0].Error != "permission denied" {
+		t.Errorf("failed items should list first, got %+v", items[0])
+	}
+	for _, it := range items[1:] {
+		if it.Status != ItemDone || (it.ProjectID == nil && it.ModuleID == nil) {
+			t.Errorf("done item without a link to what it scanned: %+v", it)
+		}
+	}
+
+	runs, err := s.ListRuns(ctx, 10)
+	if err != nil || len(runs) != 1 || runs[0].ID != run.ID {
+		t.Errorf("ListRuns = %+v, %v", runs, err)
+	}
+}
+
+func TestRunItemIsIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const repo = "https://github.com/org/vpc.git"
+	run, items := newRun(t, s, NewRunItem{Kind: ItemKindModuleRepo, RepoURL: repo})
+
+	first, err := s.IngestRunItem(ctx, run.ID, items[0].ID, Scan{Report: repoScan(repo, t0, "v1.0.0")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.IngestRunItem(ctx, run.ID, items[0].ID, Scan{Report: repoScan(repo, t0, "v1.0.0")})
+	if err != nil || !again.Duplicate || again.ScanID != first.ScanID {
+		t.Errorf("resubmission = %+v, %v; want the first result marked duplicate", again, err)
+	}
+	var scans int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM scans`).Scan(&scans); err != nil || scans != 1 {
+		t.Errorf("scans recorded = %d, want 1", scans)
+	}
+	if err := s.FailRunItem(ctx, run.ID, items[0].ID, "late failure"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.RunItems(ctx, run.ID); got[0].Status != ItemDone {
+		t.Error("a late failure overwrote a done item")
+	}
+}
+
+func TestRunItemRejectsMismatchedReports(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	run, items := newRun(t, s, NewRunItem{Kind: ItemKindProject, RepoURL: "https://github.com/org/app.git", Path: "envs/prod"})
+	id := items[0].ID
+
+	wrongPath := projectScan("git@github.com:org/app.git", "main", t0)
+	wrongPath.Subject.Path = "envs/dev"
+	for name, r := range map[string]report.Report{
+		"other repo": projectScan("https://github.com/org/other.git", "main", t0),
+		"other path": wrongPath,
+		"wrong kind": repoScan("https://github.com/org/app.git", t0, "v1.0.0"),
+		"repo root":  projectScan("https://github.com/org/app.git", "main", t0),
+	} {
+		if _, err := s.IngestRunItem(ctx, run.ID, id, Scan{Report: r}); !errors.Is(err, ErrItemMismatch) {
+			t.Errorf("%s: error = %v, want ErrItemMismatch", name, err)
+		}
+	}
+	if _, err := s.IngestRunItem(ctx, run.ID+1, id, Scan{Report: wrongPath}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("item from another run: error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestClosedRunRejectsChanges(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const repo = "https://github.com/org/vpc.git"
+	run, items := newRun(t, s, NewRunItem{Kind: ItemKindModuleRepo, RepoURL: repo})
+
+	if _, err := s.FinishRun(ctx, run.ID, RunCancelled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FinishRun(ctx, run.ID, RunCancelled); err != nil {
+		t.Errorf("finishing again with the same status should be a no-op, got %v", err)
+	}
+	if _, err := s.FinishRun(ctx, run.ID, RunFinished); !errors.Is(err, ErrRunClosed) {
+		t.Errorf("changing a closed run's status: %v, want ErrRunClosed", err)
+	}
+	if _, err := s.IngestRunItem(ctx, run.ID, items[0].ID, Scan{Report: repoScan(repo, t0, "v1.0.0")}); !errors.Is(err, ErrRunClosed) {
+		t.Errorf("ingest into a closed run: %v, want ErrRunClosed", err)
+	}
+	if err := s.FailRunItem(ctx, run.ID, items[0].ID, "x"); !errors.Is(err, ErrRunClosed) {
+		t.Errorf("fail in a closed run: %v, want ErrRunClosed", err)
+	}
+}
+
+func TestCreateRunIdempotencyKey(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	items := []NewRunItem{{Kind: ItemKindModuleRepo, RepoURL: "https://github.com/org/vpc.git"}}
+
+	first, firstItems, err := s.CreateRun(ctx, "run", "key-1", items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, againItems, err := s.CreateRun(ctx, "run", "key-1", items)
+	if err != nil || again.ID != first.ID || againItems[0].ID != firstItems[0].ID {
+		t.Errorf("retry with the same key created a new run: %+v, %v", again, err)
+	}
+	other, _, err := s.CreateRun(ctx, "run", "", items)
+	if err != nil || other.ID == first.ID {
+		t.Errorf("run without a key should be new: %+v, %v", other, err)
+	}
+	if _, _, err := s.CreateRun(ctx, "run", "", items); err != nil {
+		t.Errorf("runs without keys must not collide: %v", err)
 	}
 }
 

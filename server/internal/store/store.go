@@ -32,6 +32,11 @@ func New(pool *pgxpool.Pool) *Store {
 // Migrate applies pending migrations. A Postgres advisory lock makes it safe
 // for several server replicas to start at once.
 func (s *Store) Migrate(ctx context.Context) error {
+	return s.migrateTo(ctx, 0)
+}
+
+// migrateTo applies migrations up to version, or all of them when version is 0.
+func (s *Store) migrateTo(ctx context.Context, version int64) error {
 	fsys, err := fs.Sub(migrations, "migrations")
 	if err != nil {
 		return err
@@ -48,7 +53,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := provider.Up(ctx); err != nil {
+	if version == 0 {
+		_, err = provider.Up(ctx)
+	} else {
+		_, err = provider.UpTo(ctx, version)
+	}
+	if err != nil {
 		return fmt.Errorf("applying migrations: %w", err)
 	}
 	return nil

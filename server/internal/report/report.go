@@ -5,6 +5,8 @@ package report
 import (
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/WasathTheekshana/terragraph/server/internal/source"
@@ -35,10 +37,31 @@ type Report struct {
 }
 
 type Subject struct {
-	Kind      string `json:"kind"`
-	RepoURL   string `json:"repo_url"`
+	Kind    string `json:"kind"`
+	RepoURL string `json:"repo_url"`
+	// Path is the Terraform root's directory inside the repo, slash-separated.
+	// Empty means the repo root.
+	Path      string `json:"path,omitempty"`
 	CommitSHA string `json:"commit_sha,omitempty"`
 	Branch    string `json:"branch,omitempty"`
+}
+
+// ProjectPath is the subject's path in canonical form: "." for the repo root.
+func (s Subject) ProjectPath() string {
+	if s.Path == "" {
+		return "."
+	}
+	return path.Clean(s.Path)
+}
+
+// ValidPath reports whether p is empty or a relative, slash-separated path that
+// stays inside the repo.
+func ValidPath(p string) bool {
+	if p == "" {
+		return true
+	}
+	c := path.Clean(p)
+	return !strings.Contains(p, `\`) && !path.IsAbs(c) && c != ".." && !strings.HasPrefix(c, "../")
 }
 
 type Fact struct {
@@ -76,6 +99,10 @@ func (r Report) Validate() error {
 		add("subject.repo_url is required (pass --repo-url to the scanner if the checkout has no origin remote)")
 	} else if source.RepoKey(r.Subject.RepoURL) == "" {
 		add("subject.repo_url %q is not a recognizable repo URL", r.Subject.RepoURL)
+	}
+
+	if !ValidPath(r.Subject.Path) {
+		add("subject.path %q must be a relative, slash-separated path inside the repo", r.Subject.Path)
 	}
 
 	switch r.ScannerType {

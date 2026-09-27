@@ -28,8 +28,10 @@ const (
 )
 
 type Project struct {
-	ID            int64      `json:"id"`
-	RepoURL       string     `json:"repo_url"`
+	ID      int64  `json:"id"`
+	RepoURL string `json:"repo_url"`
+	// Path is the Terraform root inside the repo; "." is the repo root.
+	Path          string     `json:"path"`
 	LastScanAt    *time.Time `json:"last_scan_at"`
 	LastCommitSHA string     `json:"last_commit_sha"`
 	LastBranch    string     `json:"last_branch"`
@@ -56,6 +58,7 @@ type Module struct {
 type Usage struct {
 	ProjectID        int64   `json:"project_id"`
 	ProjectRepoURL   string  `json:"project_repo_url"`
+	ProjectPath      string  `json:"project_path"`
 	CallName         string  `json:"call_name"`
 	ModuleID         *int64  `json:"module_id"`
 	ModuleKey        *string `json:"module_key"`
@@ -83,7 +86,7 @@ func (s *Store) GetProject(ctx context.Context, id int64) (Project, error) {
 
 func (s *Store) projects(ctx context.Context, where string, args ...any) ([]Project, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT p.id, p.repo_url, p.last_scan_at, p.last_commit_sha, p.last_branch,
+		SELECT p.id, p.repo_url, p.path, p.last_scan_at, p.last_commit_sha, p.last_branch,
 			count(u.call_name),
 			count(*) FILTER (WHERE `+outdatedSQL+`),
 			count(*) FILTER (WHERE lv.major > u.major)
@@ -92,13 +95,13 @@ func (s *Store) projects(ctx context.Context, where string, args ...any) ([]Proj
 		LEFT JOIN module_latest_versions lv ON lv.module_id = u.module_id
 		`+where+`
 		GROUP BY p.id
-		ORDER BY p.repo_url`, args...)
+		ORDER BY p.repo_url, p.path`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying projects: %w", err)
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Project, error) {
 		var p Project
-		err := row.Scan(&p.ID, &p.RepoURL, &p.LastScanAt, &p.LastCommitSHA, &p.LastBranch,
+		err := row.Scan(&p.ID, &p.RepoURL, &p.Path, &p.LastScanAt, &p.LastCommitSHA, &p.LastBranch,
 			&p.ModuleCalls, &p.OutdatedCalls, &p.MajorBehindCalls)
 		return p, err
 	})
@@ -160,12 +163,12 @@ func (s *Store) ModuleConsumers(ctx context.Context, moduleID int64) ([]Usage, e
 	if err := s.mustExist(ctx, "modules", moduleID); err != nil {
 		return nil, err
 	}
-	return s.usages(ctx, `u.module_id = $1 ORDER BY p.repo_url, u.call_name`, moduleID)
+	return s.usages(ctx, `u.module_id = $1 ORDER BY p.repo_url, p.path, u.call_name`, moduleID)
 }
 
 func (s *Store) usages(ctx context.Context, where string, args ...any) ([]Usage, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT p.id, p.repo_url, u.call_name, u.module_id, m.source_key, u.source,
+		SELECT p.id, p.repo_url, p.path, u.call_name, u.module_id, m.source_key, u.source,
 			u.ref_declared, u.ref_resolved, u.version_resolved, u.resolution_source, u.file, u.line,
 			`+pinnedVersionSQL+`, lv.tag, `+latestVersionSQL+`, `+majorsBehindSQL+`, `+outdatedSQL+`
 		FROM module_usages u
@@ -178,7 +181,7 @@ func (s *Store) usages(ctx context.Context, where string, args ...any) ([]Usage,
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Usage, error) {
 		var u Usage
-		err := row.Scan(&u.ProjectID, &u.ProjectRepoURL, &u.CallName, &u.ModuleID, &u.ModuleKey, &u.Source,
+		err := row.Scan(&u.ProjectID, &u.ProjectRepoURL, &u.ProjectPath, &u.CallName, &u.ModuleID, &u.ModuleKey, &u.Source,
 			&u.RefDeclared, &u.RefResolved, &u.VersionResolved, &u.ResolutionSource, &u.File, &u.Line,
 			&u.PinnedVersion, &u.LatestTag, &u.LatestVersion, &u.MajorsBehind, &u.Outdated)
 		return u, err

@@ -37,6 +37,44 @@ func TestUsageStatus(t *testing.T) {
 	}
 }
 
+func TestRunStatus(t *testing.T) {
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		run         store.Run
+		want        string
+		wantRefresh int
+	}{
+		{"progressing", store.Run{Status: store.RunRunning, UpdatedAt: now.Add(-time.Minute)}, "Running", 2},
+		{"stalled", store.Run{Status: store.RunRunning, UpdatedAt: now.Add(-11 * time.Minute)}, "Stalled", 0},
+		{"cancelled", store.Run{Status: store.RunCancelled}, "Cancelled", 0},
+		{"failures", store.Run{Status: store.RunFinished, Failed: 1}, "Finished with failures", 0},
+		{"clean", store.Run{Status: store.RunFinished}, "Finished", 0},
+	}
+	for _, tt := range tests {
+		if got := runStatus(tt.run, now).Label; got != tt.want {
+			t.Errorf("%s: runStatus = %q, want %q", tt.name, got, tt.want)
+		}
+		if got := runRefresh(tt.run, now); got != tt.wantRefresh {
+			t.Errorf("%s: runRefresh = %d, want %d", tt.name, got, tt.wantRefresh)
+		}
+	}
+}
+
+func TestItemStatus(t *testing.T) {
+	tests := map[string]store.RunItem{
+		"Waiting":       {Status: store.ItemPending},
+		"Failed":        {Status: store.ItemFailed},
+		"Done":          {Status: store.ItemDone, Applied: ptr(true)},
+		"Recorded only": {Status: store.ItemDone, Applied: ptr(false)},
+	}
+	for want, it := range tests {
+		if got := itemStatus(it).Label; got != want {
+			t.Errorf("itemStatus(%+v) = %q, want %q", it, got, want)
+		}
+	}
+}
+
 func TestEveryToneHasBadgeClasses(t *testing.T) {
 	for _, tn := range []tone{toneOK, toneWarn, toneBad, toneMuted} {
 		if badgeClasses[tn] == "" {

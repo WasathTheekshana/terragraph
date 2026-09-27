@@ -1,6 +1,22 @@
 package hclscan
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestScanReportsParseErrorsConcisely(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte("module \"x\" {\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Scan(dir)
+	if err == nil || !strings.HasPrefix(err.Error(), "main.tf:1: ") || strings.Contains(err.Error(), dir) {
+		t.Errorf("err = %v; want a file:line message without the directory", err)
+	}
+}
 
 func TestScanSampleProject(t *testing.T) {
 	calls, err := Scan("../../testdata/sample-project")

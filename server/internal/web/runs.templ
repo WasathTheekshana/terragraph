@@ -1,0 +1,119 @@
+package web
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/WasathTheekshana/terragraph/server/internal/store"
+)
+
+templ runsPage(runs []store.Run, now time.Time) {
+	@layout("Scans", "runs") {
+		@pageHeader("Scans", "Each run of the terragraph scanner and how far it got.")
+		if len(runs) == 0 {
+			@emptyState("No scans yet") {
+				<p>Run the scanner on a repo or a folder of repos, for example { " " }@code("terragraph scan --path ~/projects")</p>
+			}
+		} else {
+			@table() {
+				<thead>
+					<tr>
+						@th("Scan", false)
+						@th("Started", false)
+						@th("Status", false)
+						@th("Progress", false)
+						@th("Failed", true)
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+					for _, r := range runs {
+						<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+							<td class="px-4 py-3">
+								<a href={ runURL(r.ID) } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">#{ fmt.Sprint(r.ID) }</a>
+								<div class="mt-0.5 max-w-md truncate text-xs text-slate-500 dark:text-slate-400" title={ r.Label }>{ r.Label }</div>
+							</td>
+							<td class="px-4 py-3 whitespace-nowrap text-slate-500 dark:text-slate-400">{ formatTime(&r.CreatedAt) }</td>
+							<td class="px-4 py-3">
+								@badge(runStatus(r, now))
+							</td>
+							<td class="w-56 px-4 py-3">
+								@progressBar(r.Done+r.Failed, r.Total, fmt.Sprintf("Scan %d progress", r.ID))
+								<div class="mt-1 text-xs text-slate-500 tabular-nums dark:text-slate-400">{ fmt.Sprintf("%d of %d", r.Done+r.Failed, r.Total) }</div>
+							</td>
+							<td class="px-4 py-3 text-right tabular-nums">
+								@countBadge(r.Failed, toneBad)
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+}
+
+templ runPage(r store.Run, items []store.RunItem, now time.Time) {
+	@page(fmt.Sprintf("Scan #%d", r.ID), "runs", runRefresh(r, now)) {
+		@backLink("/runs", "All scans")
+		<div class="mt-4 flex flex-wrap items-start justify-between gap-4">
+			@pageHeader(fmt.Sprintf("Scan #%d", r.ID), r.Label)
+			@badge(runStatus(r, now))
+		</div>
+		<div class="mt-6">
+			@progressBar(r.Done+r.Failed, r.Total, "Scan progress")
+			<p class="mt-2 text-sm text-slate-500 tabular-nums dark:text-slate-400">
+				{ fmt.Sprintf("%d of %d items · started %s", r.Done+r.Failed, r.Total, formatTime(&r.CreatedAt)) }
+				if r.FinishedAt != nil {
+					{ fmt.Sprintf(" · finished %s", formatTime(r.FinishedAt)) }
+				}
+			</p>
+		</div>
+		@statGrid() {
+			@stat("Items", r.Total, toneMuted)
+			@stat("Done", r.Done, toneMuted)
+			@stat("Failed", r.Failed, countTone(r.Failed, toneBad))
+			@stat("Waiting", r.Pending, toneMuted)
+		}
+		if runStalled(r, now) {
+			<p class="mt-6 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+				This scan hasn't reported progress for over 10 minutes, so its scanner was probably stopped. Run the scan again to finish it.
+			</p>
+		}
+		<h2 class="mt-10 text-lg font-semibold">Items</h2>
+		@table() {
+			<thead>
+				<tr>
+					@th("Status", false)
+					@th("What", false)
+					@th("Repository", false)
+					@th("Details", false)
+				</tr>
+			</thead>
+			<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+				for _, it := range items {
+					<tr>
+						<td class="px-4 py-3">
+							@badge(itemStatus(it))
+						</td>
+						<td class="px-4 py-3 whitespace-nowrap text-slate-600 dark:text-slate-300">{ itemKind(it) }</td>
+						<td class="px-4 py-3">
+							<div class="break-all">{ it.RepoURL }</div>
+							if p := projectPath(it.Path); p != "" {
+								<div class="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">{ p }</div>
+							}
+						</td>
+						<td class="px-4 py-3 text-sm">
+							if it.Error != "" {
+								<span class="font-mono text-xs break-all text-rose-700 dark:text-rose-400">{ it.Error }</span>
+							} else if link := itemLink(it); link != "" {
+								<a href={ link } class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">View</a>
+								if it.Applied != nil && !*it.Applied {
+									<span class="ml-2 text-xs text-slate-500 dark:text-slate-400" title="The branch isn't tracked, or a newer scan is already current.">not the current state</span>
+								}
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		}
+	}
+}

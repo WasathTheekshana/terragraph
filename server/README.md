@@ -27,8 +27,7 @@ Then point the scanner at it:
 export TERRAGRAPH_API_URL=http://localhost:8080
 export TERRAGRAPH_TOKEN=dev-token
 
-terragraph scan --mode module-repo --repo-url https://github.com/terraform-aws-modules/terraform-aws-vpc.git
-terragraph scan --mode project --path path/to/terraform --branch main
+terragraph scan --path path/to/a/repo/or/folder/of/repos
 ```
 
 Then open `http://localhost:8080` for the web UI.
@@ -43,6 +42,10 @@ Server-rendered pages, no JavaScript:
 | `/projects/{id}` | a project's module calls, each with its pinned version, latest version, and status |
 | `/modules` | modules with their latest release and how many projects use them |
 | `/modules/{id}` | which versions of a module are in use, and every project using it |
+| `/runs` | each scanner run, with its status and progress |
+| `/runs/{id}` | one run's items as they're scanned, failures first; refreshes every 2 seconds while the run is active |
+
+A run with no progress for 10 minutes shows as stalled: its scanner was stopped before closing it.
 
 The pages live in `internal/web`: [templ](https://templ.guide) templates (`*.templ`) and
 [Tailwind](https://tailwindcss.com) classes. The generated Go code (`*_templ.go`) and stylesheet
@@ -65,11 +68,15 @@ Migrations run automatically at startup and are safe with several replicas.
 
 ## Current state
 
+A project is one Terraform root: a repo plus the root's path inside it, so `envs/dev` and
+`envs/prod` of one repo are separate projects.
+
 Every scan is stored in history, but a project scan only replaces the project's current module
 calls when:
 
 - its branch is in `TERRAGRAPH_TRACKED_BRANCHES`, so feature branch pipelines don't overwrite
-  what `main` uses, and
+  what `main` uses (folders outside git, reported as `file://` URLs, have no branch and always
+  count), and
 - it's at least as new (`generated_at`) as the scan it would replace, so a delayed pipeline
   can't roll the state back.
 
@@ -97,12 +104,29 @@ All responses are JSON. Errors look like `{"error": "...", "details": ["..."]}`.
 | `GET` | `/api/v1/modules` | modules with their latest version and consumer counts |
 | `GET` | `/api/v1/modules/{id}` | one module, with the same fields |
 | `GET` | `/api/v1/modules/{id}/consumers` | every project calling a module (its blast radius) |
+| `POST` | `/api/v1/runs` | start a run: `{"label": "...", "items": [{"kind": "project", "repo_url": "...", "path": "envs/prod"}, {"kind": "module_repo", "repo_url": "..."}]}` |
+| `POST` | `/api/v1/runs/{id}/items/{item}/scan` | submit an item's scan report and mark it done |
+| `POST` | `/api/v1/runs/{id}/items/{item}/fail` | mark an item failed: `{"error": "..."}` |
+| `POST` | `/api/v1/runs/{id}/finish` | close a run: `{"status": "finished"}` or `"cancelled"` |
+| `GET` | `/api/v1/runs`, `/api/v1/runs/{id}` | runs with progress counts; one run with its items |
 | `GET` | `/healthz` | liveness; doesn't touch the database |
 | `GET` | `/readyz` | readiness; checks the database |
+
+All `POST` endpoints need `Authorization: Bearer <token>`.
 
 `POST /api/v1/scans` returns `201` with `{"scan_id": 12, "applied": true}`, `401` for a bad token,
 `415` for a non-JSON body, `413` above 10 MiB, `400` for malformed JSON, and `422` listing every
 validation problem.
+
+The run endpoints are what the scanner uses, and every one is safe to retry:
+
+- `POST /api/v1/runs` honors an `Idempotency-Key` header: repeating it returns the run it
+  created.
+- Submitting an item that's already done returns `200` with the original result and
+  `"duplicate": true`, without recording it again. The report is ingested and the item marked
+  done in one transaction.
+- A report that doesn't match its item (other repo, path, or kind) gets `422`; changing a
+  finished or cancelled run gets `409`.
 
 A usage looks like:
 

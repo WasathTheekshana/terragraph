@@ -52,6 +52,88 @@ func usageStatus(u store.Usage) status {
 	}
 }
 
+// staleAfter is how long a running scan can go without progress before it's
+// shown as stalled: its scanner was most likely stopped.
+const staleAfter = 10 * time.Minute
+
+func runStalled(r store.Run, now time.Time) bool {
+	return r.Status == store.RunRunning && now.Sub(r.UpdatedAt) > staleAfter
+}
+
+// runStatus is how a run is shown, given the time now.
+func runStatus(r store.Run, now time.Time) status {
+	switch {
+	case runStalled(r, now):
+		return status{"Stalled", toneBad}
+	case r.Status == store.RunRunning:
+		return status{"Running", toneWarn}
+	case r.Status == store.RunCancelled:
+		return status{"Cancelled", toneMuted}
+	case r.Failed > 0:
+		return status{"Finished with failures", toneBad}
+	default:
+		return status{"Finished", toneOK}
+	}
+}
+
+// runRefresh is how often, in seconds, a run's page reloads: only while it
+// is making progress.
+func runRefresh(r store.Run, now time.Time) int {
+	if r.Status == store.RunRunning && !runStalled(r, now) {
+		return 2
+	}
+	return 0
+}
+
+func itemStatus(it store.RunItem) status {
+	switch {
+	case it.Status == store.ItemFailed:
+		return status{"Failed", toneBad}
+	case it.Status == store.ItemPending:
+		return status{"Waiting", toneMuted}
+	case it.Applied != nil && !*it.Applied:
+		return status{"Recorded only", toneMuted}
+	default:
+		return status{"Done", toneOK}
+	}
+}
+
+func itemKind(it store.RunItem) string {
+	if it.Kind == store.ItemKindModuleRepo {
+		return "Module versions"
+	}
+	return "Project"
+}
+
+// itemLink is where a finished item's results are, or "" if nowhere yet.
+func itemLink(it store.RunItem) templ.SafeURL {
+	switch {
+	case it.ProjectID != nil:
+		return projectURL(*it.ProjectID)
+	case it.ModuleID != nil:
+		return moduleURL(*it.ModuleID)
+	default:
+		return ""
+	}
+}
+
+func runURL(id int64) templ.SafeURL { return templ.SafeURL(fmt.Sprintf("/runs/%d", id)) }
+
+// projectPath is shown under a project's repo; the repo root needs no label.
+func projectPath(p string) string {
+	if p == "." {
+		return ""
+	}
+	return p
+}
+
+func pathPrefix(p string) string {
+	if p = projectPath(p); p == "" {
+		return ""
+	}
+	return "Path " + p + " · "
+}
+
 // countTone colors a count of problems: zero is fine, anything else isn't.
 func countTone(n int, problem tone) tone {
 	if n == 0 {
@@ -153,7 +235,7 @@ func matches(q string, fields ...string) bool {
 var projectSorts = []string{"name", "calls", "outdated", "behind", "scanned"}
 
 func filterSortProjects(ps []store.Project, q listQuery) []store.Project {
-	out := slices.DeleteFunc(slices.Clone(ps), func(p store.Project) bool { return !matches(q.Q, p.RepoURL) })
+	out := slices.DeleteFunc(slices.Clone(ps), func(p store.Project) bool { return !matches(q.Q, p.RepoURL, p.Path) })
 	slices.SortStableFunc(out, func(a, b store.Project) int {
 		var c int
 		switch q.Sort {
@@ -167,7 +249,7 @@ func filterSortProjects(ps []store.Project, q listQuery) []store.Project {
 			c = compareTime(a.LastScanAt, b.LastScanAt)
 		}
 		if c == 0 {
-			c = cmp.Compare(a.RepoURL, b.RepoURL)
+			c = cmp.Or(cmp.Compare(a.RepoURL, b.RepoURL), cmp.Compare(a.Path, b.Path))
 		}
 		if q.Desc {
 			return -c

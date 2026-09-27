@@ -18,8 +18,23 @@ type fakeStore struct {
 	projects []store.Project
 	modules  []store.Module
 	usages   []store.Usage
+	runs     []store.Run
+	items    []store.RunItem
 	err      error
 }
+
+func (f *fakeStore) ListRuns(context.Context, int) ([]store.Run, error) { return f.runs, f.err }
+
+func (f *fakeStore) GetRun(_ context.Context, id int64) (store.Run, error) {
+	for _, r := range f.runs {
+		if r.ID == id {
+			return r, f.err
+		}
+	}
+	return store.Run{}, store.ErrNotFound
+}
+
+func (f *fakeStore) RunItems(context.Context, int64) ([]store.RunItem, error) { return f.items, f.err }
 
 func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.projects, f.err }
 func (f *fakeStore) ListModules(context.Context) ([]store.Module, error)   { return f.modules, f.err }
@@ -95,8 +110,10 @@ func get(t *testing.T, h http.Handler, path string) (*http.Response, string) {
 	return resp, string(body)
 }
 
+var testNow = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+
 func newTestHandler(s Store) http.Handler {
-	return NewHandler(s, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return newHandler(s, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return testNow })
 }
 
 func TestPages(t *testing.T) {
@@ -142,9 +159,93 @@ func TestPages(t *testing.T) {
 	}
 }
 
+func runStore() *fakeStore {
+	finished := testNow.Add(-time.Hour)
+	return &fakeStore{
+		runs: []store.Run{
+			{ID: 3, Label: "laptop: ~/next-projects", Status: store.RunRunning, CreatedAt: testNow.Add(-time.Minute),
+				UpdatedAt: testNow.Add(-5 * time.Second), Total: 4, Pending: 1, Done: 2, Failed: 1},
+			{ID: 2, Label: "ci: org/app", Status: store.RunRunning, CreatedAt: testNow.Add(-2 * time.Hour),
+				UpdatedAt: testNow.Add(-time.Hour), Total: 2, Pending: 2},
+			{ID: 1, Label: "ci: org/vpc", Status: store.RunFinished, CreatedAt: finished, UpdatedAt: finished,
+				FinishedAt: &finished, Total: 1, Done: 1},
+		},
+		items: []store.RunItem{
+			{ID: 1, Kind: store.ItemKindModuleRepo, RepoURL: "git@github.com:org/private.git", Status: store.ItemFailed,
+				Error: "git ls-remote: Permission denied (publickey)"},
+			{ID: 2, Kind: store.ItemKindProject, RepoURL: "git@github.com:org/app.git", Path: "envs/prod", Status: store.ItemPending},
+			{ID: 3, Kind: store.ItemKindProject, RepoURL: "git@github.com:org/app.git", Path: ".", Status: store.ItemDone,
+				Applied: ptr(true), ProjectID: ptr(int64(7))},
+			{ID: 4, Kind: store.ItemKindModuleRepo, RepoURL: "https://github.com/org/vpc.git", Status: store.ItemDone,
+				Applied: ptr(true), ModuleID: ptr(int64(10))},
+		},
+	}
+}
+
+func TestRunsPages(t *testing.T) {
+	h := newTestHandler(runStore())
+
+	resp, body := get(t, h, "/runs")
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /runs = %d", resp.StatusCode)
+	}
+	for _, want := range []string{`href="/runs/3"`, "laptop: ~/next-projects", "Running", "Stalled", "Finished", "3 of 4", `<progress`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/runs missing %q", want)
+		}
+	}
+	if strings.Contains(body, `http-equiv="refresh"`) {
+		t.Error("the runs list shouldn't auto-refresh")
+	}
+
+	_, body = get(t, h, "/runs/3")
+	for _, want := range []string{
+		`http-equiv="refresh" content="2"`,
+		"Permission denied (publickey)",
+		"Waiting", "Failed", "Done", "envs/prod",
+		`href="/projects/7"`, `href="/modules/10"`,
+		"Module versions",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/runs/3 missing %q", want)
+		}
+	}
+}
+
+func TestRunPageStopsRefreshing(t *testing.T) {
+	h := newTestHandler(runStore())
+	for id, wantStalled := range map[string]bool{"2": true, "1": false} {
+		_, body := get(t, h, "/runs/"+id)
+		if strings.Contains(body, `http-equiv="refresh"`) {
+			t.Errorf("/runs/%s refreshes though it isn't making progress", id)
+		}
+		if got := strings.Contains(body, "probably stopped"); got != wantStalled {
+			t.Errorf("/runs/%s stalled notice = %v, want %v", id, got, wantStalled)
+		}
+	}
+	if resp, _ := get(t, h, "/runs/99"); resp.StatusCode != 404 {
+		t.Errorf("unknown run = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestProjectPathsShown(t *testing.T) {
+	s := sampleStore()
+	s.projects[1].Path = "envs/prod"
+	h := newTestHandler(s)
+	if _, body := get(t, h, "/"); !strings.Contains(body, "envs/prod") {
+		t.Error("projects list doesn't show the root path")
+	}
+	if _, body := get(t, h, "/projects/2"); !strings.Contains(body, "Path envs/prod") {
+		t.Error("project page doesn't show the root path")
+	}
+	if _, body := get(t, h, "/?q=envs/prod"); !strings.Contains(body, "network.git") || strings.Contains(body, "payments.git") {
+		t.Error("search doesn't match root paths")
+	}
+}
+
 func TestEmptyStates(t *testing.T) {
 	h := newTestHandler(&fakeStore{})
-	for path, want := range map[string]string{"/": "No projects scanned yet", "/modules": "No modules yet"} {
+	for path, want := range map[string]string{"/": "No projects scanned yet", "/modules": "No modules yet", "/runs": "No scans yet"} {
 		if resp, body := get(t, h, path); resp.StatusCode != 200 || !strings.Contains(body, want) {
 			t.Errorf("GET %s = %d, want empty state %q", path, resp.StatusCode, want)
 		}

@@ -12,6 +12,9 @@ Commands below run from this `server/` folder.
 docker compose up -d
 ```
 
+From the repo root, `make up` does the same with the settings from `.env`; see the
+[root README](../README.md) for the other make targets.
+
 This starts Postgres and the server on `http://localhost:8080` with the ingest token `dev-token`
 (override with `TERRAGRAPH_INGEST_TOKEN`). The Compose project is named `terragraph`, so the
 containers are `terragraph-postgres-1` and `terragraph-server-1`, and data lives in the

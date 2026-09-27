@@ -12,28 +12,35 @@ reports to a self-hosted server.
 
 ## Quick start
 
-From the repo root, start Postgres and the server locally:
+Needs Docker, Go, and GNU make (on Windows: `choco install make` or `winget install ezwinports.make`).
+Run everything from the repo root.
 
 ```sh
-cd server && docker compose up -d
+cp .env.example .env     # PowerShell: Copy-Item .env.example .env
+make up                  # start Postgres and the server in the background
+make scan-module         # tell the server about terraform-aws-vpc's released versions
+make scan-sample         # scan the bundled sample project
+make projects            # see the result
 ```
 
-This runs as the `terragraph` Compose project: containers `terragraph-postgres-1` and
-`terragraph-server-1`, data in the `terragraph_pgdata` volume. The server listens on
-`http://localhost:8080` with the ingest token `dev-token`.
+`make` on its own lists every target. The common ones:
 
-In another terminal, also from the repo root, build the scanner and send it some scans:
+| target | |
+|---|---|
+| `make up` / `make down` | start / stop the local stack |
+| `make reset` | stop the stack and delete its data |
+| `make logs` | follow the server logs |
+| `make scan PROJECT=path/to/terraform` | scan one of your own projects (`BRANCH=main` by default) |
+| `make scan-module MODULE_REPO=url` | list one of your module repos' versions |
+| `make projects` / `make modules` | query the server |
+| `make test` / `make test-db` | tests; `test-db` also runs the database tests against `make up`'s Postgres |
 
-```sh
-cd scanner && go build -o terragraph ./cmd/terragraph
-export TERRAGRAPH_API_URL=http://localhost:8080 TERRAGRAPH_TOKEN=dev-token
-./terragraph scan --mode module-repo --repo-url https://github.com/terraform-aws-modules/terraform-aws-vpc.git
-./terragraph scan --mode project --path testdata/sample-project --repo-url https://github.com/example/app.git --branch main
+`.env` holds the local settings: the ingest token the server accepts and the scanner sends (keep
+`TERRAGRAPH_INGEST_TOKEN` and `TERRAGRAPH_TOKEN` equal), the server URL, and the test database.
+Without a `.env`, the defaults in `.env.example` apply. `.env` is gitignored.
 
-curl http://localhost:8080/api/v1/projects
-```
-
-To stop the stack, run `docker compose down` in `server/`; add `-v` to also delete the data.
+The stack runs as the `terragraph` Compose project: containers `terragraph-postgres-1` and
+`terragraph-server-1`, data in the `terragraph_pgdata` volume, server on `http://localhost:8080`.
 
 Each folder has its own Go module and its own GitHub Actions workflow, which only runs when that
 folder changes.

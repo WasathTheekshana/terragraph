@@ -56,8 +56,8 @@ func Load(rootDir string) (*Manifest, error) {
 
 // ResolvedCommit returns the git commit SHA the module call named callName
 // resolved to, by running `git rev-parse HEAD` inside its checked-out
-// directory. Returns "" if there's no manifest entry, the dir isn't a git
-// checkout, or git isn't available.
+// directory. Returns "" if there's no manifest entry, the module isn't its
+// own git checkout under .terraform/modules, or git isn't available.
 func (m *Manifest) ResolvedCommit(callName string) string {
 	if m == nil {
 		return ""
@@ -68,9 +68,32 @@ func (m *Manifest) ResolvedCommit(callName string) string {
 	}
 
 	dir := filepath.Join(m.rootDir, entry.Dir)
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	top, err := git(dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	// Without this, a local module (or any dir lacking its own .git) would
+	// report the enclosing project's commit.
+	modulesDir, err := filepath.Abs(filepath.Join(m.rootDir, ".terraform", "modules"))
+	if err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(modulesDir, filepath.Clean(top))
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+
+	sha, err := git(dir, "rev-parse", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return sha
+}
+
+func git(dir string, args ...string) (string, error) {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

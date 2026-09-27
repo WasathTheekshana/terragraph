@@ -27,6 +27,16 @@ go test ./...
 ./terragraph scan --mode module-repo --repo-url https://github.com/terraform-aws-modules/terraform-aws-vpc.git --dry-run
 ```
 
+Fixtures:
+
+- `testdata/sample-project`: covers every source style, including a fake private repo and a local module. It can be scanned but not `terraform get`'d.
+- `testdata/public-modules`: public modules only, so `terraform get` works and refs resolve to exact commits.
+
+## Pipelines
+
+- `build`: runs on every push. Checks gofmt, vet, and tests, then builds binaries for linux, darwin, and windows.
+- `cli-e2e`: manual (Actions tab, "Run workflow"). Builds the CLI, scans both fixtures (the public one after `terraform get`) and the terraform-aws-vpc module repo, and checks the reports. Reports are uploaded as the `scan-reports` artifact.
+
 ## Usage
 
 Scan a project (a repo that *calls* modules) and print the report without

@@ -1,3 +1,5 @@
 /terragraph
 /terragraph.exe
 *.out
+.terraform/
+.terraform.lock.hcl

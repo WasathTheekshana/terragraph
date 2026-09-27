@@ -15,7 +15,7 @@ reports to a self-hosted server.
 From the repo root, start Postgres and the server locally:
 
 ```sh
-cd server && docker compose up --build
+cd server && docker compose up -d
 ```
 
 This runs as the `terragraph` Compose project: containers `terragraph-postgres-1` and

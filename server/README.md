@@ -9,7 +9,7 @@ Commands below run from this `server/` folder.
 ## Run locally
 
 ```sh
-docker compose up --build
+docker compose up -d
 ```
 
 This starts Postgres and the server on `http://localhost:8080` with the ingest token `dev-token`

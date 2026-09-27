@@ -1,8 +1,8 @@
 # terragraph server
 
 Receives scan reports from the [terragraph scanner](../scanner/README.md) and answers which
-projects use which modules, at which versions, and how far behind they are. See
-[docs/design.md](../docs/design.md) for the full platform design.
+projects use which modules, at which versions, and how far behind they are, through a web UI and
+a JSON API. See [docs/design.md](../docs/design.md) for the full platform design.
 
 Commands below run from this `server/` folder.
 
@@ -30,6 +30,26 @@ export TERRAGRAPH_TOKEN=dev-token
 terragraph scan --mode module-repo --repo-url https://github.com/terraform-aws-modules/terraform-aws-vpc.git
 terragraph scan --mode project --path path/to/terraform --branch main
 ```
+
+Then open `http://localhost:8080` for the web UI.
+
+## Web UI
+
+Server-rendered pages, no JavaScript:
+
+| page | |
+|---|---|
+| `/` | projects, with counts of outdated and major-behind module calls; searchable and sortable |
+| `/projects/{id}` | a project's module calls, each with its pinned version, latest version, and status |
+| `/modules` | modules with their latest release and how many projects use them |
+| `/modules/{id}` | which versions of a module are in use, and every project using it |
+
+The pages live in `internal/web`: [templ](https://templ.guide) templates (`*.templ`) and
+[Tailwind](https://tailwindcss.com) classes. The generated Go code (`*_templ.go`) and stylesheet
+(`static/app.css`) are committed, so building the server needs no extra tools. After editing a
+template or `view.go`, run `make generate` from the repo root to regenerate both; it downloads
+Tailwind's standalone CLI into `.bin/` on first use, so no Node.js is needed. CI fails if the
+committed output is stale.
 
 ## Configuration
 
@@ -72,8 +92,10 @@ All responses are JSON. Errors look like `{"error": "...", "details": ["..."]}`.
 |---|---|---|
 | `POST` | `/api/v1/scans` | ingest a scan report; needs `Authorization: Bearer <token>` |
 | `GET` | `/api/v1/projects` | projects with counts of outdated module calls |
+| `GET` | `/api/v1/projects/{id}` | one project, with the same counts |
 | `GET` | `/api/v1/projects/{id}/usages` | a project's module calls with pinned and latest versions |
 | `GET` | `/api/v1/modules` | modules with their latest version and consumer counts |
+| `GET` | `/api/v1/modules/{id}` | one module, with the same fields |
 | `GET` | `/api/v1/modules/{id}/consumers` | every project calling a module (its blast radius) |
 | `GET` | `/healthz` | liveness; doesn't touch the database |
 | `GET` | `/readyz` | readiness; checks the database |
@@ -125,5 +147,6 @@ Each test runs in its own schema, so they don't interfere with each other or wit
 
 ## Pipelines
 
-- `server-build`: runs on pushes that change `server/`. Checks gofmt and vet, runs all tests
-  with the race detector against a Postgres service container, then builds the Docker image.
+- `server-build`: runs on pushes that change `server/`. Checks gofmt, that the generated UI files
+  are current, and vet; runs all tests with the race detector against a Postgres service
+  container; then builds the Docker image.

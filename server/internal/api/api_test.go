@@ -49,12 +49,32 @@ func (f *fakeStore) ModuleConsumers(ctx context.Context, id int64) ([]store.Usag
 	return f.ProjectUsages(ctx, id)
 }
 
+func (f *fakeStore) GetProject(_ context.Context, id int64) (store.Project, error) {
+	if _, ok := f.usages[id]; !ok {
+		return store.Project{}, store.ErrNotFound
+	}
+	return store.Project{ID: id, RepoURL: "git@github.com:org/p.git"}, nil
+}
+
+func (f *fakeStore) GetModule(_ context.Context, id int64) (store.Module, error) {
+	if _, ok := f.usages[id]; !ok {
+		return store.Module{}, store.ErrNotFound
+	}
+	return store.Module{ID: id, Key: "github.com/org/vpc", Kind: "git"}, nil
+}
+
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
 
 func newTestServer(t *testing.T, fs *fakeStore) *httptest.Server {
 	t.Helper()
+	return newTestServerWithUI(t, fs, nil)
+}
+
+func newTestServerWithUI(t *testing.T, fs *fakeStore, ui http.Handler) *httptest.Server {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(NewHandler(fs, Config{IngestToken: token, TrackedBranches: []string{"main"}}, log))
+	cfg := Config{IngestToken: token, TrackedBranches: []string{"main"}, UI: ui}
+	srv := httptest.NewServer(NewHandler(fs, cfg, log))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -205,24 +225,73 @@ func TestUsageEndpoints(t *testing.T) {
 	tests := []struct {
 		path       string
 		wantStatus int
+		wantKey    string
 	}{
-		{"/api/v1/projects/7/usages", http.StatusOK},
-		{"/api/v1/modules/7/consumers", http.StatusOK},
-		{"/api/v1/projects/8/usages", http.StatusNotFound},
-		{"/api/v1/modules/8/consumers", http.StatusNotFound},
-		{"/api/v1/projects/abc/usages", http.StatusBadRequest},
-		{"/api/v1/projects/0/usages", http.StatusBadRequest},
+		{"/api/v1/projects/7", http.StatusOK, "project"},
+		{"/api/v1/modules/7", http.StatusOK, "module"},
+		{"/api/v1/projects/7/usages", http.StatusOK, "usages"},
+		{"/api/v1/modules/7/consumers", http.StatusOK, "usages"},
+		{"/api/v1/projects/8", http.StatusNotFound, ""},
+		{"/api/v1/modules/8", http.StatusNotFound, ""},
+		{"/api/v1/projects/8/usages", http.StatusNotFound, ""},
+		{"/api/v1/modules/8/consumers", http.StatusNotFound, ""},
+		{"/api/v1/projects/abc/usages", http.StatusBadRequest, ""},
+		{"/api/v1/projects/0", http.StatusBadRequest, ""},
 	}
 	for _, tt := range tests {
 		resp, body := get(t, srv.URL+tt.path)
 		if resp.StatusCode != tt.wantStatus {
 			t.Errorf("GET %s status = %d, want %d (body %v)", tt.path, resp.StatusCode, tt.wantStatus, body)
 		}
-		if tt.wantStatus == http.StatusOK {
-			if usages, _ := body["usages"].([]any); len(usages) != 1 {
-				t.Errorf("GET %s usages = %v, want 1", tt.path, body["usages"])
-			}
+		if tt.wantKey != "" && body[tt.wantKey] == nil {
+			t.Errorf("GET %s body = %v, want a %q field", tt.path, body, tt.wantKey)
 		}
+	}
+}
+
+var testUI = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	_, _ = io.WriteString(w, "ui page")
+})
+
+func TestUnknownAPIPathIsJSON(t *testing.T) {
+	for name, ui := range map[string]http.Handler{"api only": nil, "with ui": testUI} {
+		t.Run(name, func(t *testing.T) {
+			srv := newTestServerWithUI(t, &fakeStore{}, ui)
+			resp, body := get(t, srv.URL+"/api/v1/nope")
+			if resp.StatusCode != http.StatusNotFound || body["error"] != "not found" {
+				t.Errorf("status = %d, body = %v; want a JSON 404", resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+func TestUIServesNonAPIPaths(t *testing.T) {
+	srv := newTestServerWithUI(t, &fakeStore{}, testUI)
+	for _, path := range []string{"/", "/projects/3", "/modules"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != "ui page" {
+			t.Errorf("GET %s = %d %q, want the UI handler", path, resp.StatusCode, body)
+		}
+	}
+	if resp, body := get(t, srv.URL+"/api/v1/projects"); resp.StatusCode != http.StatusOK || body["projects"] == nil {
+		t.Errorf("API route shadowed by UI: %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestNoUIWithoutConfig(t *testing.T) {
+	srv := newTestServer(t, &fakeStore{})
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET / status = %d, want 404 when no UI is configured", resp.StatusCode)
 	}
 }
 

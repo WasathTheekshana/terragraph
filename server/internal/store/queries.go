@@ -74,6 +74,14 @@ type Usage struct {
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
+	return s.projects(ctx, "")
+}
+
+func (s *Store) GetProject(ctx context.Context, id int64) (Project, error) {
+	return single(s.projects(ctx, "WHERE p.id = $1", id))
+}
+
+func (s *Store) projects(ctx context.Context, where string, args ...any) ([]Project, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT p.id, p.repo_url, p.last_scan_at, p.last_commit_sha, p.last_branch,
 			count(u.call_name),
@@ -82,10 +90,11 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 		FROM projects p
 		LEFT JOIN module_usages u ON u.project_id = p.id
 		LEFT JOIN module_latest_versions lv ON lv.module_id = u.module_id
+		`+where+`
 		GROUP BY p.id
-		ORDER BY p.repo_url`)
+		ORDER BY p.repo_url`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("listing projects: %w", err)
+		return nil, fmt.Errorf("querying projects: %w", err)
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Project, error) {
 		var p Project
@@ -96,6 +105,14 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 func (s *Store) ListModules(ctx context.Context) ([]Module, error) {
+	return s.modules(ctx, "")
+}
+
+func (s *Store) GetModule(ctx context.Context, id int64) (Module, error) {
+	return single(s.modules(ctx, "WHERE m.id = $1", id))
+}
+
+func (s *Store) modules(ctx context.Context, where string, args ...any) ([]Module, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT m.id, m.source_key, m.kind, m.source, m.versions_scanned_at,
 			lv.tag, `+latestVersionSQL+`,
@@ -104,10 +121,11 @@ func (s *Store) ListModules(ctx context.Context) ([]Module, error) {
 		FROM modules m
 		LEFT JOIN module_latest_versions lv ON lv.module_id = m.id
 		LEFT JOIN module_usages u ON u.module_id = m.id
+		`+where+`
 		GROUP BY m.id, lv.tag, lv.major, lv.minor, lv.patch
-		ORDER BY m.source_key`)
+		ORDER BY m.source_key`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("listing modules: %w", err)
+		return nil, fmt.Errorf("querying modules: %w", err)
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Module, error) {
 		var m Module
@@ -115,6 +133,17 @@ func (s *Store) ListModules(ctx context.Context) ([]Module, error) {
 			&m.LatestTag, &m.LatestVersion, &m.Consumers, &m.OutdatedConsumers)
 		return m, err
 	})
+}
+
+func single[T any](rows []T, err error) (T, error) {
+	var zero T
+	if err != nil {
+		return zero, err
+	}
+	if len(rows) == 0 {
+		return zero, ErrNotFound
+	}
+	return rows[0], nil
 }
 
 // ProjectUsages returns the module calls in a project's current state.

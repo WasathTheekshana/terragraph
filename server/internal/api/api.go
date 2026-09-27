@@ -25,8 +25,10 @@ const maxReportBytes = 10 << 20
 type Store interface {
 	Ingest(ctx context.Context, in store.Scan) (store.IngestResult, error)
 	ListProjects(ctx context.Context) ([]store.Project, error)
+	GetProject(ctx context.Context, id int64) (store.Project, error)
 	ProjectUsages(ctx context.Context, projectID int64) ([]store.Usage, error)
 	ListModules(ctx context.Context) ([]store.Module, error)
+	GetModule(ctx context.Context, id int64) (store.Module, error)
 	ModuleConsumers(ctx context.Context, moduleID int64) ([]store.Usage, error)
 	Ping(ctx context.Context) error
 }
@@ -36,6 +38,9 @@ type Config struct {
 	// TrackedBranches are the branches whose project scans become the
 	// project's current state.
 	TrackedBranches []string
+	// UI serves every path outside /api/, /healthz, and /readyz. Nil serves
+	// the API only.
+	UI http.Handler
 }
 
 type handler struct {
@@ -53,9 +58,18 @@ func NewHandler(s Store, cfg Config, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /readyz", h.readyz)
 	mux.Handle("POST /api/v1/scans", h.requireToken(http.HandlerFunc(h.createScan)))
 	mux.HandleFunc("GET /api/v1/projects", h.listProjects)
+	mux.HandleFunc("GET /api/v1/projects/{id}", h.getProject)
 	mux.HandleFunc("GET /api/v1/projects/{id}/usages", h.projectUsages)
 	mux.HandleFunc("GET /api/v1/modules", h.listModules)
+	mux.HandleFunc("GET /api/v1/modules/{id}", h.getModule)
 	mux.HandleFunc("GET /api/v1/modules/{id}/consumers", h.moduleConsumers)
+	// Without this, unknown API paths would fall through to the UI and get HTML.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "not found")
+	})
+	if cfg.UI != nil {
+		mux.Handle("/", cfg.UI)
+	}
 
 	return h.recoverPanics(h.logRequests(mux))
 }
@@ -126,8 +140,12 @@ func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"projects": nonNil(projects)})
 }
 
+func (h *handler) getProject(w http.ResponseWriter, r *http.Request) {
+	getByID(h, w, r, "project", "project", h.store.GetProject)
+}
+
 func (h *handler) projectUsages(w http.ResponseWriter, r *http.Request) {
-	h.usages(w, r, h.store.ProjectUsages, "project")
+	getByID(h, w, r, "project", "usages", nonNilUsages(h.store.ProjectUsages))
 }
 
 func (h *handler) listModules(w http.ResponseWriter, r *http.Request) {
@@ -139,28 +157,40 @@ func (h *handler) listModules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"modules": nonNil(modules)})
 }
 
-func (h *handler) moduleConsumers(w http.ResponseWriter, r *http.Request) {
-	h.usages(w, r, h.store.ModuleConsumers, "module")
+func (h *handler) getModule(w http.ResponseWriter, r *http.Request) {
+	getByID(h, w, r, "module", "module", h.store.GetModule)
 }
 
-func (h *handler) usages(w http.ResponseWriter, r *http.Request,
-	query func(context.Context, int64) ([]store.Usage, error), resource string,
+func (h *handler) moduleConsumers(w http.ResponseWriter, r *http.Request) {
+	getByID(h, w, r, "module", "usages", nonNilUsages(h.store.ModuleConsumers))
+}
+
+// getByID serves the result of get for the {id} path value as {key: result}.
+func getByID[T any](h *handler, w http.ResponseWriter, r *http.Request, resource, key string,
+	get func(context.Context, int64) (T, error),
 ) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		writeError(w, http.StatusBadRequest, resource+" id must be a positive integer")
 		return
 	}
-	usages, err := query(r.Context(), id)
+	v, err := get(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, resource+" not found")
 		return
 	}
 	if err != nil {
-		h.internalError(w, r, "listing usages", err)
+		h.internalError(w, r, "getting "+resource, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"usages": nonNil(usages)})
+	writeJSON(w, http.StatusOK, map[string]any{key: v})
+}
+
+func nonNilUsages(get func(context.Context, int64) ([]store.Usage, error)) func(context.Context, int64) ([]store.Usage, error) {
+	return func(ctx context.Context, id int64) ([]store.Usage, error) {
+		u, err := get(ctx, id)
+		return nonNil(u), err
+	}
 }
 
 func (h *handler) internalError(w http.ResponseWriter, r *http.Request, msg string, err error) {

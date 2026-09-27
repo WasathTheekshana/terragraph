@@ -18,6 +18,7 @@ import (
 	"github.com/WasathTheekshana/terragraph/server/internal/api"
 	"github.com/WasathTheekshana/terragraph/server/internal/config"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
+	"github.com/WasathTheekshana/terragraph/server/internal/web"
 )
 
 func main() {
@@ -53,6 +54,7 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		Handler: api.NewHandler(st, api.Config{
 			IngestToken:     cfg.IngestToken,
 			TrackedBranches: cfg.TrackedBranches,
+			UI:              web.NewHandler(st, log),
 		}, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

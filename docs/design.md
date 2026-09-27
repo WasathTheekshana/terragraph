@@ -40,15 +40,17 @@ inventory) can plug into the same platform without a redesign.
  │  - ingest API (validates + stores reports)    │
  │  - Postgres (projects, modules, edges,        │
  │    versions, scan history)                    │
- │  - query API (for the web UI)                 │
+ │  - query API (JSON)                           │
+ │  - web UI (server-rendered pages)             │
  └───────────────────┬───────────────────────────┘
                       │
                       ▼
-            ┌───────────────────┐
-            │     Web UI         │
-            │ table + graph view │
-            └───────────────────┘
+                  browsers
 ```
+
+The web UI is rendered by the server itself (Go, [templ](https://templ.guide), Tailwind, no
+JavaScript), reading the same store as the API, so the whole platform is one binary and one
+container.
 
 Module repos (the 10, later 100s, of custom modules) are scanned the same way, a
 `terragraph scan --mode module-repo` job on their own pipeline (or a scheduled job hitting
@@ -158,14 +160,17 @@ version at query time, so nothing derived is stored.
 ## 7. API (v1)
 
 - `POST /api/v1/scans`: ingest a scan report (body = schema in §5), with a shared bearer token.
-- `GET /api/v1/projects`: projects with counts of outdated and major-behind module calls.
+- `GET /api/v1/projects`, `GET /api/v1/projects/{id}`: projects with counts of outdated and
+  major-behind module calls.
 - `GET /api/v1/projects/{id}/usages`: a project's current module calls with pinned version,
   latest version, majors behind, and outdated flag.
-- `GET /api/v1/modules`: modules with latest version and consumer counts.
+- `GET /api/v1/modules`, `GET /api/v1/modules/{id}`: modules with latest version and consumer
+  counts.
 - `GET /api/v1/modules/{id}/consumers`: every project calling a module (the blast radius).
 - `GET /healthz`, `GET /readyz`: liveness and readiness.
 
-The graph endpoint for the v2 graph view isn't built yet.
+The web UI pages (`/`, `/projects/{id}`, `/modules`, `/modules/{id}`) show the same data. The
+graph endpoint for the v2 graph view isn't built yet.
 
 ## 8. Scanner CLI (Go)
 
@@ -188,8 +193,7 @@ One repository, one folder per component:
 ```
 docs/        this design doc
 scanner/     Go module: CLI, HCL parsing, git tag enumeration
-server/      Go module: ingest + query API, Postgres access, docker-compose for local runs
-web/         (planned) frontend with table view + graph view
+server/      Go module: ingest + query API, web UI, Postgres access, docker-compose for local runs
 deploy/      (planned) production packaging for self-hosting
 .github/     one workflow per component, triggered only by changes to that component
 ```
@@ -205,7 +209,7 @@ schema in §5 is the contract between them.
 - **v1 (MVP)**: `module-usage` + `module-repo` scanners, ingest API, Postgres, table-view UI
   (project × module × pinned version × latest × major-behind), `consumers` reverse-lookup
   endpoint.
-- **v2**: graph view (Cytoscape/React Flow) with filters; scan history / drift-over-time
+- **v2**: graph view with filters; scan history / drift-over-time
   charts; webhook/Slack notification on "module X released a new major version, N projects
   affected."
 - **v3**: pluggable scanner types on the same ingest schema: cost (Infracost-style),

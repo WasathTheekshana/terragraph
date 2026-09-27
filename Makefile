@@ -13,9 +13,18 @@ export TERRAGRAPH_API_URL TERRAGRAPH_INGEST_TOKEN TERRAGRAPH_TOKEN
 MODULE_REPO ?= https://github.com/terraform-aws-modules/terraform-aws-vpc.git
 BRANCH      ?= main
 
+TAILWIND_VERSION := 4.3.3
 ifeq ($(OS),Windows_NT)
 EXE := .exe
+TAILWIND_ASSET := tailwindcss-windows-x64.exe
+else
+TAILWIND_OS := $(if $(filter Darwin,$(shell uname -s)),macos,linux)
+TAILWIND_ARCH := $(if $(filter arm64 aarch64,$(shell uname -m)),arm64,x64)
+TAILWIND_ASSET := tailwindcss-$(TAILWIND_OS)-$(TAILWIND_ARCH)
 endif
+# Tailwind's standalone CLI, so generating CSS needs no Node.js.
+TAILWIND := .bin/tailwindcss-$(TAILWIND_VERSION)$(EXE)
+WEB := server/internal/web
 
 COMPOSE := docker compose -f server/docker-compose.yml
 # -C runs the scanner from scanner/, so relative scan paths are made absolute first.
@@ -23,7 +32,7 @@ SCANNER := go run -C scanner ./cmd/terragraph
 
 .DEFAULT_GOAL := help
 
-.PHONY: help up down reset logs build scan scan-sample scan-module projects modules vet test test-db
+.PHONY: help up down reset logs build scan scan-sample scan-module projects modules generate vet test test-db
 
 # $(info) prints from make itself, so the text isn't subject to any shell's quoting.
 help:
@@ -40,6 +49,8 @@ help:
 	$(info Queries:)
 	$(info make projects      list projects)
 	$(info make modules       list modules)
+	$(info Web UI:)
+	$(info make generate      regenerate the UI's templ code and CSS after editing it)
 	$(info Checks:)
 	$(info make vet           go vet both modules)
 	$(info make test          unit tests; database tests are skipped)
@@ -76,6 +87,16 @@ projects:
 
 modules:
 	curl -s $(TERRAGRAPH_API_URL)/api/v1/modules
+
+generate: $(TAILWIND)
+	go tool -C server templ generate -path internal/web
+	$(TAILWIND) -i $(WEB)/styles/app.css -o $(WEB)/static/app.css --minify
+
+$(TAILWIND):
+	curl -sSfL --create-dirs -o $(TAILWIND) https://github.com/tailwindlabs/tailwindcss/releases/download/v$(TAILWIND_VERSION)/$(TAILWIND_ASSET)
+ifneq ($(OS),Windows_NT)
+	chmod +x $(TAILWIND)
+endif
 
 vet:
 	go vet -C scanner ./...

@@ -1,0 +1,263 @@
+package web
+
+import (
+	"fmt"
+
+	"github.com/WasathTheekshana/terragraph/server/internal/store"
+)
+
+templ projectsPage(all []store.Project, shown []store.Project, q listQuery) {
+	@layout("Projects", "projects") {
+		@pageHeader("Projects", "Terraform projects and how current their module versions are.")
+		if len(all) == 0 {
+			@emptyState("No projects scanned yet") {
+				<p>Scan a project with the terragraph CLI, for example { " " }@code("terragraph scan --mode project --branch main")</p>
+			}
+		} else {
+			{{ s := summarizeProjects(all) }}
+			@statGrid() {
+				@stat("Projects", s.Projects, toneMuted)
+				@stat("Module calls", s.Calls, toneMuted)
+				@stat("Outdated", s.Outdated, countTone(s.Outdated, toneWarn))
+				@stat("Major behind", s.Behind, countTone(s.Behind, toneBad))
+			}
+			@searchForm("/", q, "Filter by repository")
+			if len(shown) == 0 {
+				@emptyState("No projects match") {
+					<p>Nothing matches “{ q.Q }”.</p>
+				}
+			} else {
+				@table() {
+					<thead>
+						<tr>
+							@sortTh(q, "/", "name", "Project", false)
+							@th("Branch", false)
+							@sortTh(q, "/", "calls", "Module calls", true)
+							@sortTh(q, "/", "outdated", "Outdated", true)
+							@sortTh(q, "/", "behind", "Major behind", true)
+							@sortTh(q, "/", "scanned", "Last scan", false)
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+						for _, p := range shown {
+							<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+								<td class="px-4 py-3">
+									<a href={ projectURL(p.ID) } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ p.RepoURL }</a>
+								</td>
+								<td class="px-4 py-3 font-mono text-xs whitespace-nowrap text-slate-600 dark:text-slate-300">{ p.LastBranch }</td>
+								<td class="px-4 py-3 text-right tabular-nums">{ fmt.Sprint(p.ModuleCalls) }</td>
+								<td class="px-4 py-3 text-right tabular-nums">
+									@countBadge(p.OutdatedCalls, toneWarn)
+								</td>
+								<td class="px-4 py-3 text-right tabular-nums">
+									@countBadge(p.MajorBehindCalls, toneBad)
+								</td>
+								<td class="px-4 py-3 whitespace-nowrap text-slate-500 dark:text-slate-400">{ formatTime(p.LastScanAt) }</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+	}
+}
+
+templ projectPage(p store.Project, usages []store.Usage) {
+	@layout(p.RepoURL, "projects") {
+		@backLink("/", "All projects")
+		<div class="mt-4">
+			@pageHeader(p.RepoURL, fmt.Sprintf("Branch %s · commit %s · scanned %s", p.LastBranch, shortSHA(p.LastCommitSHA), formatTime(p.LastScanAt)))
+		</div>
+		{{ s := summarizeUsages(usages) }}
+		@statGrid() {
+			@stat("Module calls", s.Calls, toneMuted)
+			@stat("Up to date", s.UpToDate, toneMuted)
+			@stat("Outdated", s.Outdated, countTone(s.Outdated, toneWarn))
+			@stat("Major behind", s.Behind, countTone(s.Behind, toneBad))
+		}
+		if len(usages) == 0 {
+			@emptyState("No module calls") {
+				<p>The latest scan of this project found no <code>module</code> blocks.</p>
+			}
+		} else {
+			<h2 class="mt-10 text-lg font-semibold">Module calls</h2>
+			@table() {
+				<thead>
+					<tr>
+						@th("Call", false)
+						@th("Module", false)
+						@th("Pinned", false)
+						@th("Latest", false)
+						@th("Status", false)
+						@th("Location", false)
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+					for _, u := range usages {
+						<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+							<td class="px-4 py-3 font-mono text-xs font-medium whitespace-nowrap">{ u.CallName }</td>
+							<td class="px-4 py-3">
+								if u.ModuleID != nil {
+									<a href={ moduleURL(*u.ModuleID) } class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ orDash(u.ModuleKey) }</a>
+								} else {
+									<span class="text-slate-500 dark:text-slate-400">{ u.Source }</span>
+								}
+							</td>
+							<td class="px-4 py-3 font-mono text-xs whitespace-nowrap">
+								{ orDash(u.PinnedVersion) }
+								if u.PinnedVersion == nil && u.RefDeclared != "" {
+									<span class="text-slate-400 dark:text-slate-500">({ u.RefDeclared })</span>
+								}
+							</td>
+							<td class="px-4 py-3 font-mono text-xs whitespace-nowrap">{ orDash(u.LatestVersion) }</td>
+							<td class="px-4 py-3">
+								@badge(usageStatus(u))
+							</td>
+							<td class="px-4 py-3 font-mono text-xs whitespace-nowrap text-slate-500 dark:text-slate-400">
+								{ location(u) }
+								if u.ResolutionSource == "modules-json" {
+									<span title="Resolved from .terraform/modules/modules.json" class="ml-1 text-emerald-600 dark:text-emerald-400">verified</span>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+}
+
+templ modulesPage(all []store.Module, shown []store.Module, q listQuery) {
+	@layout("Modules", "modules") {
+		@pageHeader("Modules", "Every module a project calls, with its latest release and who uses it.")
+		if len(all) == 0 {
+			@emptyState("No modules yet") {
+				<p>Modules appear once a project that calls them is scanned. Scan module repos with { " " }@code("terragraph scan --mode module-repo --repo-url <url>") to learn their latest versions.</p>
+			}
+		} else {
+			@searchForm("/modules", q, "Filter by module or source")
+			if len(shown) == 0 {
+				@emptyState("No modules match") {
+					<p>Nothing matches “{ q.Q }”.</p>
+				}
+			} else {
+				@table() {
+					<thead>
+						<tr>
+							@sortTh(q, "/modules", "name", "Module", false)
+							@th("Kind", false)
+							@th("Latest", false)
+							@sortTh(q, "/modules", "consumers", "Used by", true)
+							@sortTh(q, "/modules", "outdated", "Outdated users", true)
+							@sortTh(q, "/modules", "scanned", "Versions scanned", false)
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+						for _, m := range shown {
+							<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+								<td class="px-4 py-3">
+									<a href={ moduleURL(m.ID) } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ m.Key }</a>
+								</td>
+								<td class="px-4 py-3 text-slate-600 dark:text-slate-300">{ m.Kind }</td>
+								<td class="px-4 py-3 font-mono text-xs whitespace-nowrap">{ orDash(m.LatestVersion) }</td>
+								<td class="px-4 py-3 text-right tabular-nums">{ plural(m.Consumers, "project", "projects") }</td>
+								<td class="px-4 py-3 text-right tabular-nums">
+									@countBadge(m.OutdatedConsumers, toneWarn)
+								</td>
+								<td class="px-4 py-3 whitespace-nowrap text-slate-500 dark:text-slate-400">{ formatTime(m.VersionsScannedAt) }</td>
+							</tr>
+						}
+					</tbody>
+				}
+			}
+		}
+	}
+}
+
+templ modulePage(m store.Module, consumers []store.Usage) {
+	@layout(m.Key, "modules") {
+		@backLink("/modules", "All modules")
+		<div class="mt-4">
+			@pageHeader(m.Key, fmt.Sprintf("%s module · latest %s · versions scanned %s", m.Kind, orDash(m.LatestVersion), formatTime(m.VersionsScannedAt)))
+		</div>
+		{{ s := summarizeUsages(consumers) }}
+		@statGrid() {
+			@stat("Projects", m.Consumers, toneMuted)
+			@stat("Module calls", s.Calls, toneMuted)
+			@stat("Outdated", s.Outdated, countTone(s.Outdated, toneWarn))
+			@stat("Major behind", s.Behind, countTone(s.Behind, toneBad))
+		}
+		if m.LatestVersion == nil {
+			<p class="mt-6 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+				The latest version is unknown. Scan this module's repository with { " " }@code("terragraph scan --mode module-repo") to find it.
+			</p>
+		}
+		if len(consumers) == 0 {
+			@emptyState("No projects use this module") {
+				<p>No project's current state calls it.</p>
+			}
+		} else {
+			<h2 class="mt-10 text-lg font-semibold">Versions in use</h2>
+			@table() {
+				<thead>
+					<tr>
+						@th("Version", false)
+						@th("Module calls", true)
+						@th("Status", false)
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+					for _, v := range versionsInUse(consumers) {
+						<tr>
+							<td class="px-4 py-3 font-mono text-xs">{ v.Version }</td>
+							<td class="px-4 py-3 text-right tabular-nums">{ fmt.Sprint(v.Calls) }</td>
+							<td class="px-4 py-3">
+								@badge(v.Status)
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+			<h2 class="mt-10 text-lg font-semibold">Used by</h2>
+			@table() {
+				<thead>
+					<tr>
+						@th("Project", false)
+						@th("Call", false)
+						@th("Pinned", false)
+						@th("Status", false)
+						@th("Location", false)
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+					for _, u := range consumers {
+						<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+							<td class="px-4 py-3">
+								<a href={ projectURL(u.ProjectID) } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ u.ProjectRepoURL }</a>
+							</td>
+							<td class="px-4 py-3 font-mono text-xs whitespace-nowrap">{ u.CallName }</td>
+							<td class="px-4 py-3 font-mono text-xs whitespace-nowrap">{ orDash(u.PinnedVersion) }</td>
+							<td class="px-4 py-3">
+								@badge(usageStatus(u))
+							</td>
+							<td class="px-4 py-3 font-mono text-xs whitespace-nowrap text-slate-500 dark:text-slate-400">{ location(u) }</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+}
+
+templ errorPage(code int, title string, message string) {
+	@layout(title, "") {
+		<div class="py-16 text-center">
+			<p class="text-sm font-semibold text-indigo-600 dark:text-indigo-400">{ fmt.Sprint(code) }</p>
+			<h1 class="mt-2 text-2xl font-semibold tracking-tight">{ title }</h1>
+			<p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{ message }</p>
+			<p class="mt-6">
+				@backLink("/", "Back to projects")
+			</p>
+		</div>
+	}
+}

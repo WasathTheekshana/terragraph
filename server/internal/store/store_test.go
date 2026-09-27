@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -197,6 +198,15 @@ func TestIngestAndQuery(t *testing.T) {
 		t.Errorf("vpc module = %+v, want latest v2.1.0, 1 consumer, 1 outdated", *vpc)
 	}
 
+	gotProject, err := s.GetProject(ctx, p.ID)
+	if err != nil || !reflect.DeepEqual(gotProject, p) {
+		t.Errorf("GetProject(%d) = %+v, %v; want %+v", p.ID, gotProject, err, p)
+	}
+	gotModule, err := s.GetModule(ctx, vpc.ID)
+	if err != nil || gotModule.Key != vpc.Key || gotModule.Consumers != vpc.Consumers {
+		t.Errorf("GetModule(%d) = %+v, %v; want %+v", vpc.ID, gotModule, err, *vpc)
+	}
+
 	consumers, err := s.ModuleConsumers(ctx, vpc.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -308,6 +318,12 @@ func TestNotFound(t *testing.T) {
 	}
 	if _, err := s.ModuleConsumers(ctx, 999); !errors.Is(err, ErrNotFound) {
 		t.Errorf("ModuleConsumers(999) error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetProject(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetProject(999) error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetModule(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetModule(999) error = %v, want ErrNotFound", err)
 	}
 }
 

@@ -1,0 +1,162 @@
+package web
+
+import "fmt"
+
+templ layout(title string, active string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · terragraph</title>
+			<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
+			<link rel="stylesheet" href={ cssURL }/>
+		</head>
+		<body class="min-h-screen bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+			<header class="border-b border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+				<div class="mx-auto flex h-14 max-w-6xl items-center gap-8 px-4">
+					<a href="/" class="flex items-center gap-2 font-semibold tracking-tight">
+						<img src="/static/favicon.svg" alt="" class="size-6"/>
+						terragraph
+					</a>
+					<nav class="flex h-full gap-6 text-sm font-medium">
+						@navLink("/", "Projects", active == "projects")
+						@navLink("/modules", "Modules", active == "modules")
+					</nav>
+				</div>
+			</header>
+			<main class="mx-auto max-w-6xl px-4 py-8">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
+
+templ navLink(href templ.SafeURL, label string, current bool) {
+	<a
+		href={ href }
+		class={ "flex items-center border-b-2 transition-colors",
+			templ.KV("border-indigo-500 text-slate-900 dark:text-white", current),
+			templ.KV("border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white", !current) }
+		if current {
+			aria-current="page"
+		}
+	>
+		{ label }
+	</a>
+}
+
+templ pageHeader(title string, subtitle string) {
+	<div>
+		<h1 class="text-2xl font-semibold tracking-tight break-all">{ title }</h1>
+		if subtitle != "" {
+			<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{ subtitle }</p>
+		}
+	</div>
+}
+
+templ backLink(href templ.SafeURL, label string) {
+	<a href={ href } class="text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">← { label }</a>
+}
+
+templ statGrid() {
+	<dl class="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+		{ children... }
+	</dl>
+}
+
+templ stat(label string, value int, t tone) {
+	<div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+		<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-400">{ label }</dt>
+		<dd
+			class={ "mt-1 text-2xl font-semibold tabular-nums",
+				templ.KV("text-amber-600 dark:text-amber-400", t == toneWarn),
+				templ.KV("text-rose-600 dark:text-rose-400", t == toneBad) }
+		>
+			{ fmt.Sprint(value) }
+		</dd>
+	</div>
+}
+
+templ badge(s status) {
+	<span class={ "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset", badgeClasses[s.Tone] }>
+		{ s.Label }
+	</span>
+}
+
+templ countBadge(n int, t tone) {
+	if n == 0 {
+		<span class="text-slate-400 dark:text-slate-500">0</span>
+	} else {
+		@badge(status{Label: fmt.Sprint(n), Tone: t})
+	}
+}
+
+templ searchForm(action string, q listQuery, placeholder string) {
+	<form method="get" action={ templ.SafeURL(action) } class="mt-8 flex flex-wrap items-center gap-2" role="search">
+		<input type="hidden" name="sort" value={ q.Sort }/>
+		if q.Desc {
+			<input type="hidden" name="dir" value="desc"/>
+		}
+		<label for="q" class="sr-only">Search</label>
+		<input
+			id="q"
+			type="search"
+			name="q"
+			value={ q.Q }
+			placeholder={ placeholder }
+			class="w-full max-w-sm rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-indigo-500 dark:border-slate-700 dark:bg-slate-900"
+		/>
+		<button type="submit" class="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">
+			Search
+		</button>
+		if q.Q != "" {
+			<a href={ templ.SafeURL(action) } class="text-sm text-slate-500 hover:text-slate-900 dark:hover:text-white">Clear</a>
+		}
+	</form>
+}
+
+templ table() {
+	<div class="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+		<table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
+			{ children... }
+		</table>
+	</div>
+}
+
+templ th(label string, numeric bool) {
+	<th scope="col" class={ "bg-slate-50 px-4 py-2.5 text-xs font-medium tracking-wide text-slate-500 uppercase dark:bg-slate-900 dark:text-slate-400", templ.KV("text-right", numeric), templ.KV("text-left", !numeric) }>
+		{ label }
+	</th>
+}
+
+templ sortTh(q listQuery, path string, key string, label string, numeric bool) {
+	<th
+		scope="col"
+		class={ "bg-slate-50 px-4 py-2.5 text-xs font-medium tracking-wide text-slate-500 uppercase dark:bg-slate-900 dark:text-slate-400", templ.KV("text-right", numeric), templ.KV("text-left", !numeric) }
+		if key == q.Sort {
+			if q.Desc {
+				aria-sort="descending"
+			} else {
+				aria-sort="ascending"
+			}
+		}
+	>
+		<a href={ q.sortURL(path, key) } class="hover:text-slate-900 dark:hover:text-white">
+			{ label } { q.sortIndicator(key) }
+		</a>
+	</th>
+}
+
+templ emptyState(title string) {
+	<div class="mt-8 rounded-lg border border-dashed border-slate-300 p-10 text-center dark:border-slate-700">
+		<p class="font-medium">{ title }</p>
+		<div class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+			{ children... }
+		</div>
+	</div>
+}
+
+templ code(s string) {
+	<code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs dark:bg-slate-800">{ s }</code>
+}

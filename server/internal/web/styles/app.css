@@ -1,0 +1,5 @@
+/* Tailwind input. Regenerate static/app.css with `make generate` after changing classes. */
+@import "tailwindcss" source(none);
+
+@source "../*.templ";
+@source "../view.go";

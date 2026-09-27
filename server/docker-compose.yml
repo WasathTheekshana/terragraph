@@ -1,4 +1,6 @@
 # Local development stack. Not for production: the credentials are fixed.
+name: terragraph
+
 services:
   postgres:
     image: postgres:17-alpine

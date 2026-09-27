@@ -12,10 +12,19 @@ reports to a self-hosted server.
 
 ## Quick start
 
+From the repo root, start Postgres and the server locally:
+
 ```sh
 cd server && docker compose up --build
+```
 
-# in another terminal
+This runs as the `terragraph` Compose project: containers `terragraph-postgres-1` and
+`terragraph-server-1`, data in the `terragraph_pgdata` volume. The server listens on
+`http://localhost:8080` with the ingest token `dev-token`.
+
+In another terminal, also from the repo root, build the scanner and send it some scans:
+
+```sh
 cd scanner && go build -o terragraph ./cmd/terragraph
 export TERRAGRAPH_API_URL=http://localhost:8080 TERRAGRAPH_TOKEN=dev-token
 ./terragraph scan --mode module-repo --repo-url https://github.com/terraform-aws-modules/terraform-aws-vpc.git
@@ -23,6 +32,8 @@ export TERRAGRAPH_API_URL=http://localhost:8080 TERRAGRAPH_TOKEN=dev-token
 
 curl http://localhost:8080/api/v1/projects
 ```
+
+To stop the stack, run `docker compose down` in `server/`; add `-v` to also delete the data.
 
 Each folder has its own Go module and its own GitHub Actions workflow, which only runs when that
 folder changes.

@@ -13,7 +13,12 @@ docker compose up --build
 ```
 
 This starts Postgres and the server on `http://localhost:8080` with the ingest token `dev-token`
-(override with `TERRAGRAPH_INGEST_TOKEN`). Then point the scanner at it:
+(override with `TERRAGRAPH_INGEST_TOKEN`). The Compose project is named `terragraph`, so the
+containers are `terragraph-postgres-1` and `terragraph-server-1`, and data lives in the
+`terragraph_pgdata` volume. `docker compose down` stops the stack; `docker compose down -v` also
+deletes the data.
+
+Then point the scanner at it:
 
 ```sh
 export TERRAGRAPH_API_URL=http://localhost:8080

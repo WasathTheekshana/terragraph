@@ -1,7 +1,7 @@
-// Package moduleinit does best-effort resolution of the exact commit a
-// module call resolved to, by reading .terraform/modules/modules.json (only
-// present after `terraform init`) and inspecting the checked-out module dir.
-// Absent that, callers fall back to the literal ref parsed from source.
+// Package moduleinit does best-effort resolution of what a module call
+// resolved to, by reading .terraform/modules/modules.json (only present after
+// `terraform init` or `terraform get`) and inspecting the checked-out module
+// dir. Absent that, callers fall back to the literal ref parsed from source.
 package moduleinit
 
 import (
@@ -13,9 +13,19 @@ import (
 )
 
 type manifestEntry struct {
-	Key    string `json:"Key"`
-	Source string `json:"Source"`
-	Dir    string `json:"Dir"`
+	Key     string `json:"Key"`
+	Source  string `json:"Source"`
+	Version string `json:"Version"`
+	Dir     string `json:"Dir"`
+}
+
+// Resolution is what Terraform actually installed for a module call.
+type Resolution struct {
+	// Commit is the checked-out git commit, when the module was installed
+	// as its own git clone.
+	Commit string
+	// Version is the exact version Terraform selected for a registry module.
+	Version string
 }
 
 type manifest struct {
@@ -54,20 +64,27 @@ func Load(rootDir string) (*Manifest, error) {
 	return &Manifest{entries: entries, rootDir: rootDir}, nil
 }
 
-// ResolvedCommit returns the git commit SHA the module call named callName
-// resolved to, by running `git rev-parse HEAD` inside its checked-out
-// directory. Returns "" if there's no manifest entry, the module isn't its
-// own git checkout under .terraform/modules, or git isn't available.
-func (m *Manifest) ResolvedCommit(callName string) string {
+// Resolve reports what the module call named callName was installed as. The
+// second result is false when there's nothing beyond the source to go on.
+func (m *Manifest) Resolve(callName string) (Resolution, bool) {
 	if m == nil {
-		return ""
+		return Resolution{}, false
 	}
 	entry, ok := m.entries[callName]
-	if !ok || entry.Dir == "" {
-		return ""
+	if !ok {
+		return Resolution{}, false
 	}
 
-	dir := filepath.Join(m.rootDir, entry.Dir)
+	r := Resolution{Version: entry.Version}
+	if entry.Dir != "" {
+		r.Commit = m.commit(filepath.Join(m.rootDir, entry.Dir))
+	}
+	return r, r.Commit != "" || r.Version != ""
+}
+
+// commit returns HEAD of dir, or "" unless dir is inside its own git clone
+// under .terraform/modules.
+func (m *Manifest) commit(dir string) string {
 	top, err := git(dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return ""

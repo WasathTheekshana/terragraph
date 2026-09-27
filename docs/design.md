@@ -22,7 +22,7 @@ inventory) can plug into the same platform without a redesign.
   *observes* what pipelines already do.
 - Not a private module registry, modules keep living in their existing git repos.
 - Not doing live drift detection against real infra in v1, static analysis of source +
-  lockfile only.
+  `.terraform/modules/modules.json` only.
 
 ## 3. Architecture
 
@@ -89,16 +89,31 @@ future scanner types don't require a schema migration on the ingest side.
     {
       "type": "module_call",
       "call_name": "vpc",
-      "source": "git::ssh://git@github.com/org/tf-module-vpc.git",
+      "source": "git::ssh://git@github.com/org/tf-module-vpc.git?ref=v2.1.0",
       "ref_declared": "v2.1.0",
-      "ref_resolved": "v2.1.0",
-      "resolution_source": "lockfile",
+      "ref_resolved": "b588428cf7026e378c6438fc9b8a6e7d960c040b",
+      "resolution_source": "modules-json",
       "file": "main.tf",
       "line": 14
+    },
+    {
+      "type": "module_call",
+      "call_name": "s3_bucket",
+      "source": "terraform-aws-modules/s3-bucket/aws",
+      "ref_declared": "~> 4.0",
+      "ref_resolved": "f90d8a385e4c70afd048e8997dcccf125b362236",
+      "version_resolved": "4.11.0",
+      "resolution_source": "modules-json",
+      "file": "main.tf",
+      "line": 20
     }
   ]
 }
 ```
+
+- `ref_declared`: the `?ref=` of a git source, or the `version` constraint of a registry source.
+- `ref_resolved`: the exact commit when the module was installed as a git clone, otherwise the same as `ref_declared`.
+- `version_resolved`: the exact version Terraform selected for a registry module. Only present after `terraform init`/`get`.
 
 For `scanner_type: module-repo` (run against a ModuleRepo, not a Project):
 
@@ -115,109 +130,75 @@ For `scanner_type: module-repo` (run against a ModuleRepo, not a Project):
 }
 ```
 
-`resolution_source` matters: `lockfile` (from `.terraform.lock.hcl` / `.terraform/modules/modules.json`;
-exact resolved commit, most trustworthy) vs `source-parse` (regex/HCL-parsed literal ref,
-used when the project hasn't been `init`'d in CI, e.g. a plan-only pipeline). Surface this in
-the UI so stale/unresolved data is distinguishable from verified data.
+`resolution_source` matters: `modules-json` (cross-checked against
+`.terraform/modules/modules.json`; exact commit and version, most trustworthy) vs `source-parse`
+(literal ref parsed from the `module` block, used when the project hasn't been `init`'d in CI).
+Surface this in the UI so unresolved data is distinguishable from verified data.
 
-## 6. Database schema (Postgres, sketch)
+## 6. Data model
 
-```sql
-CREATE TABLE projects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  repo_url TEXT UNIQUE NOT NULL,
-  display_name TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+The server repo's migrations are authoritative; in outline:
 
-CREATE TABLE module_repos (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  repo_url TEXT UNIQUE NOT NULL,
-  display_name TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+- `projects`: one per project repo, keyed by normalized repo URL.
+- `modules`: one per versioned unit, keyed by normalized source: a git repo (subdirectory and
+  ref stripped) or a registry address. Created by whichever scan mentions it first, so project
+  and module repo scans meet on the same row however each writes the URL.
+- `module_versions`: a module repo's tags, with semver parts when the tag is an exact version.
+- `scans`: every report as submitted (append-only history and audit).
+- `module_usages`: each project's current module calls, replaced as a whole when a scan is
+  applied, with the exact version pinned.
 
-CREATE TABLE module_versions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  module_repo_id UUID REFERENCES module_repos(id),
-  tag TEXT NOT NULL,
-  semver TEXT,               -- nullable if tag isn't valid semver
-  commit_sha TEXT NOT NULL,
-  seen_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE (module_repo_id, tag)
-);
+A project scan is applied (becomes current state) only if its branch is tracked (`main`,
+`master` by default) and it isn't older than the scan it replaces. Everything else is kept in
+history only.
 
-CREATE TABLE scans (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  subject_kind TEXT NOT NULL,       -- 'project' | 'module_repo'
-  subject_id UUID NOT NULL,         -- FK into projects or module_repos (app-level, no cross-table FK)
-  scanner_type TEXT NOT NULL,
-  commit_sha TEXT,
-  branch TEXT,
-  raw_report JSONB NOT NULL,        -- full report as submitted, for audit/replay
-  submitted_at TIMESTAMPTZ DEFAULT now()
-);
+"Latest" is the highest stable tag; "outdated" and "majors behind" compare it with the pinned
+version at query time, so nothing derived is stored.
 
-CREATE TABLE module_usage (
-  project_id UUID REFERENCES projects(id),
-  module_repo_id UUID REFERENCES module_repos(id),
-  call_name TEXT NOT NULL,
-  source TEXT NOT NULL,
-  ref_declared TEXT,
-  ref_resolved TEXT,
-  resolution_source TEXT,           -- 'lockfile' | 'source-parse'
-  last_scan_id UUID REFERENCES scans(id),
-  updated_at TIMESTAMPTZ DEFAULT now(),
-  PRIMARY KEY (project_id, call_name)
-);
-```
+## 7. API (v1)
 
-`module_usage` is upserted on every ingested `module-usage` scan (delete rows for that
-project not present in the new scan, upsert the rest); this is the "current state" table the
-dashboard queries directly. `scans` stays append-only for history/audit and for later
-time-series views ("drift over the last 6 months").
+- `POST /api/v1/scans`: ingest a scan report (body = schema in §5), with a shared bearer token.
+- `GET /api/v1/projects`: projects with counts of outdated and major-behind module calls.
+- `GET /api/v1/projects/{id}/usages`: a project's current module calls with pinned version,
+  latest version, majors behind, and outdated flag.
+- `GET /api/v1/modules`: modules with latest version and consumer counts.
+- `GET /api/v1/modules/{id}/consumers`: every project calling a module (the blast radius).
+- `GET /healthz`, `GET /readyz`: liveness and readiness.
 
-"Latest version" and "major versions behind" are computed at query time by joining
-`module_usage.ref_resolved` (parsed as semver) against `MAX(semver)` in `module_versions` for
-that `module_repo_id`; no need to denormalize/store it.
-
-## 7. API contract (v1, minimal)
-
-- `POST /api/v1/scans`: ingest a scan report (body = schema in §5). Auth via per-project or
-  per-module-repo token, like a Sonar project token.
-- `GET /api/v1/projects`: list projects.
-- `GET /api/v1/projects/:id/usage`: current module_usage rows for a project, joined with
-  latest-known version + major-behind flag.
-- `GET /api/v1/modules/:id/consumers`: reverse lookup: every project currently pinning this
-  module, and at what version (the "blast radius" query).
-- `GET /api/v1/graph`: full edge list for the graph view, filterable by `?major_behind=true`
-  etc.
+The graph endpoint for the v2 graph view isn't built yet.
 
 ## 8. Scanner CLI (Go)
 
 - Single static binary: `terragraph scan --mode project|module-repo --api-url ... --token ...`.
 - HCL parsing via `hashicorp/hcl/v2` + `hashicorp/terraform-config-inspect` (the same library
   Terraform's own tooling uses to enumerate `module` blocks without a full `terraform init`).
-- If `.terraform.lock.hcl` or `.terraform/modules/modules.json` is present (project already
-  initialized in the pipeline), prefer it for `ref_resolved`; falls back to the parsed
-  literal `ref_declared` otherwise, tagging `resolution_source` accordingly.
+- If `.terraform/modules/modules.json` is present (project already initialized in the
+  pipeline), use it for `ref_resolved` and `version_resolved`; otherwise fall back to the
+  parsed literal `ref_declared`, tagging `resolution_source` accordingly.
 - `--mode module-repo`: shells out to `git ls-remote --tags` (no clone needed) to enumerate
   tags, parses semver.
-- Fails open by default (log + non-zero exit optionally suppressible) so adding the scan step
-  to a pipeline can't break existing applies; this is a read-only observability tool, not a
-  policy gate (that's a v2 feature, see §10).
+- Exits non-zero on failure. It's a read-only observability tool, not a policy gate (that's a
+  v3 feature, see §10), so pipelines that must never be blocked by it can mark the step
+  `continue-on-error`.
 
-## 9. Repositories
+## 9. Repository layout
 
-Each component is its own git repository:
+One repository, one folder per component:
 
-- `scanner`: Go CLI, HCL parsing, git tag enumeration. Holds this design doc under `docs/`.
-- `server`: Go ingest + query API, Postgres access.
-- `web`: frontend with table view + graph view.
-- `deploy`: docker-compose for self-hosting (server + postgres + web).
+```
+docs/        this design doc
+scanner/     Go module: CLI, HCL parsing, git tag enumeration
+server/      Go module: ingest + query API, Postgres access, docker-compose for local runs
+web/         (planned) frontend with table view + graph view
+deploy/      (planned) production packaging for self-hosting
+.github/     one workflow per component, triggered only by changes to that component
+```
 
-The CLI ships independently into every pipeline while the server deploys once, centrally, so
-there's no reason to force them into lockstep versioning.
+`scanner` and `server` are separate Go modules
+(`github.com/WasathTheekshana/terragraph/scanner` and `.../server`) with their own
+dependencies. The CLI ships into every pipeline while the server deploys once, centrally, so
+they're built, tested, and versioned independently. They share no Go code; the scan report
+schema in §5 is the contract between them.
 
 ## 10. Roadmap
 
@@ -233,8 +214,11 @@ there's no reason to force them into lockstep versioning.
 
 ## 11. Open questions
 
-- Auth model for the CLI token: per-repo static token (simplest) vs OIDC from the CI
-  provider (more setup, no secret to rotate). Leaning static token for v1.
+- Auth model for the CLI token: v1 uses one shared static token. Per-repo tokens or OIDC from
+  the CI provider (no secret to rotate) are the next step. Read endpoints are unauthenticated
+  for now, which assumes the server is only reachable inside the organization.
+- Registry modules: their versions come from the registry, not a git repo, so "latest" is
+  unknown for them until a registry version scanner exists.
 - Where module repos live relative to projects: assumed separate git remotes reachable via
   `git ls-remote`/SSH from wherever the server or CI runner sits; needs a real answer once
   target infra (GitHub/GitLab/on-prem) is known.

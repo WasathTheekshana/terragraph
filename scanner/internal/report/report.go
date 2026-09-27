@@ -54,6 +54,7 @@ type Fact struct {
 	Source           string           `json:"source,omitempty"`
 	RefDeclared      string           `json:"ref_declared,omitempty"`
 	RefResolved      string           `json:"ref_resolved,omitempty"`
+	VersionResolved  string           `json:"version_resolved,omitempty"`
 	ResolutionSource ResolutionSource `json:"resolution_source,omitempty"`
 	File             string           `json:"file,omitempty"`
 	Line             int              `json:"line,omitempty"`

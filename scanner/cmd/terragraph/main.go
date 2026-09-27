@@ -14,6 +14,9 @@ func main() {
 	root := &cobra.Command{
 		Use:   "terragraph",
 		Short: "TerraGraph scanner - reports Terraform module usage/versions to a TerraGraph server",
+		// main prints the error once; usage is only useful for flag mistakes.
+		SilenceErrors: true,
+		SilenceUsage:  true,
 	}
 	root.AddCommand(newScanCmd())
 

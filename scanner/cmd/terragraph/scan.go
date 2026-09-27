@@ -8,12 +8,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"terragraph/scanner/internal/client"
-	"terragraph/scanner/internal/gitinfo"
-	"terragraph/scanner/internal/gittags"
-	"terragraph/scanner/internal/hclscan"
-	"terragraph/scanner/internal/moduleinit"
-	"terragraph/scanner/internal/report"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/client"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/gitinfo"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/gittags"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/hclscan"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/moduleinit"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/report"
 )
 
 // commonFlags are shared by every scan mode: where to send the report.
@@ -35,6 +35,14 @@ func newScanCmd() *cobra.Command {
 		Use:   "scan",
 		Short: "Scan a project or module repo and report facts to TerraGraph",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Read from the environment here rather than as flag defaults, so
+			// the token never appears in --help or usage output in CI logs.
+			if common.apiURL == "" {
+				common.apiURL = os.Getenv("TERRAGRAPH_API_URL")
+			}
+			if common.token == "" {
+				common.token = os.Getenv("TERRAGRAPH_TOKEN")
+			}
 			switch mode {
 			case "project":
 				return runProjectScan(common, path, repoURL, commit, branch)
@@ -54,19 +62,12 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&commit, "commit", "", "project mode: commit SHA; auto-detected from local git if omitted")
 	cmd.Flags().StringVar(&branch, "branch", "", "project mode: branch name; auto-detected from local git if omitted")
 
-	cmd.Flags().StringVar(&common.apiURL, "api-url", envDefault("TERRAGRAPH_API_URL", ""), "TerraGraph server base URL (env TERRAGRAPH_API_URL)")
-	cmd.Flags().StringVar(&common.token, "token", envDefault("TERRAGRAPH_TOKEN", ""), "auth token for the TerraGraph server (env TERRAGRAPH_TOKEN)")
+	cmd.Flags().StringVar(&common.apiURL, "api-url", "", "TerraGraph server base URL (default: env TERRAGRAPH_API_URL)")
+	cmd.Flags().StringVar(&common.token, "token", "", "auth token for the TerraGraph server (default: env TERRAGRAPH_TOKEN)")
 	cmd.Flags().StringVar(&common.out, "out", "", "also write the JSON report to this file")
 	cmd.Flags().BoolVar(&common.dryRun, "dry-run", false, "build the report and print/save it, but don't submit it to the server")
 
 	return cmd
-}
-
-func envDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
 
 func runProjectScan(common commonFlags, path, repoURL, commit, branch string) error {
@@ -95,24 +96,24 @@ func runProjectScan(common commonFlags, path, repoURL, commit, branch string) er
 
 	facts := make([]report.Fact, 0, len(calls))
 	for _, c := range calls {
-		resolved := manifest.ResolvedCommit(c.CallName)
-		resolutionSource := report.ResolutionSourceParse
-		refResolved := c.RefDeclared
-		if resolved != "" {
-			resolutionSource = report.ResolutionSourceModulesJSON
-			refResolved = resolved
-		}
-
-		facts = append(facts, report.Fact{
+		fact := report.Fact{
 			Type:             report.FactTypeModuleCall,
 			CallName:         c.CallName,
 			Source:           c.Source,
 			RefDeclared:      c.RefDeclared,
-			RefResolved:      refResolved,
-			ResolutionSource: resolutionSource,
+			RefResolved:      c.RefDeclared,
+			ResolutionSource: report.ResolutionSourceParse,
 			File:             c.File,
 			Line:             c.Line,
-		})
+		}
+		if res, ok := manifest.Resolve(c.CallName); ok {
+			fact.ResolutionSource = report.ResolutionSourceModulesJSON
+			fact.VersionResolved = res.Version
+			if res.Commit != "" {
+				fact.RefResolved = res.Commit
+			}
+		}
+		facts = append(facts, fact)
 	}
 
 	r := report.New(report.ScannerTypeModuleUsage, report.Subject{

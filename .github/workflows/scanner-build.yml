@@ -1,11 +1,18 @@
-name: build
+name: scanner-build
 
 on:
   push:
+    paths:
+      - "scanner/**"
+      - ".github/workflows/scanner-build.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    working-directory: scanner
 
 jobs:
   test:
@@ -15,7 +22,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: scanner/go.mod
+          cache-dependency-path: scanner/go.sum
 
       - name: Check formatting
         run: |
@@ -53,7 +61,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: scanner/go.mod
+          cache-dependency-path: scanner/go.sum
 
       - name: Build
         env:
@@ -66,8 +75,9 @@ jobs:
           mkdir -p dist
           go build -trimpath -ldflags "-s -w" -o "dist/terragraph-${GOOS}-${GOARCH}${ext}" ./cmd/terragraph
 
+      # Action inputs are relative to the repo root, not the run working-directory.
       - uses: actions/upload-artifact@v4
         with:
           name: terragraph-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/
+          path: scanner/dist/
           if-no-files-found: error

@@ -1,4 +1,4 @@
-module terragraph/scanner
+module github.com/WasathTheekshana/terragraph/scanner
 
 go 1.23.0
 

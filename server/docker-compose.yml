@@ -1,0 +1,32 @@
+# Local development stack. Not for production: the credentials are fixed.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: terragraph
+      POSTGRES_PASSWORD: terragraph
+      POSTGRES_DB: terragraph
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U terragraph -d terragraph"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  server:
+    build: .
+    environment:
+      TERRAGRAPH_DATABASE_URL: postgres://terragraph:terragraph@postgres:5432/terragraph?sslmode=disable
+      TERRAGRAPH_INGEST_TOKEN: ${TERRAGRAPH_INGEST_TOKEN:-dev-token}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -1,10 +1,14 @@
-name: cli-e2e
+name: scanner-e2e
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    working-directory: scanner
 
 jobs:
   e2e:
@@ -14,7 +18,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: scanner/go.mod
+          cache-dependency-path: scanner/go.sum
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -41,6 +46,10 @@ jobs:
             echo "::error::Expected 2 module calls, all resolved to exact commits"
             exit 1
           }
+          jq -e 'any(.facts[]; .call_name == "s3_bucket" and (.version_resolved // "" | startswith("4.")))' public-report.json > /dev/null || {
+            echo "::error::Expected s3_bucket to report the exact 4.x version terraform selected"
+            exit 1
+          }
 
       - name: Scan module repo
         run: |
@@ -55,5 +64,5 @@ jobs:
         if: always()
         with:
           name: scan-reports
-          path: "*-report.json"
+          path: scanner/*-report.json
           if-no-files-found: ignore

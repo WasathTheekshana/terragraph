@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"terragraph/scanner/internal/report"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/report"
 )
 
 type Client struct {
@@ -51,8 +51,8 @@ func (c *Client) SubmitScan(r report.ScanReport) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server rejected scan (status %d): %s", resp.StatusCode, string(respBody))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return fmt.Errorf("server rejected scan (status %d): %s", resp.StatusCode, bytes.TrimSpace(respBody))
 	}
 	return nil
 }

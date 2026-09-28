@@ -1,0 +1,140 @@
+package web
+
+import (
+	"time"
+
+	"github.com/WasathTheekshana/terragraph/server/internal/store"
+)
+
+templ tokensPage(tokens []store.APIToken, form tokenForm, created string, csrf string, now time.Time) {
+	@layout("API tokens", "settings") {
+		@pageHeader("API tokens", "Credentials for scanners and scripts. Pipelines on GitHub Actions can sign in with OIDC instead and need no token.")
+		if created != "" {
+			<div class="mt-6 rounded-lg border border-emerald-300 bg-emerald-50 p-4 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+				<p class="text-sm font-medium text-emerald-900 dark:text-emerald-200">Token created. Copy it now: it won't be shown again.</p>
+				<code class="mt-3 block rounded-md bg-white px-3 py-2 font-mono text-sm break-all select-all dark:bg-slate-900">{ created }</code>
+				<p class="mt-3 text-xs text-emerald-900 dark:text-emerald-300">
+					Store it as a CI secret and give it to the scanner as
+					@code("TERRAGRAPH_TOKEN")
+					{ ", or send it as " }
+					@code("Authorization: Bearer <token>")
+				</p>
+			</div>
+		}
+		<section class="mt-8 rounded-lg border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+			<h2 class="text-lg font-semibold">New token</h2>
+			if len(form.Problems) > 0 {
+				<ul class="mt-4 list-inside list-disc rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300" role="alert">
+					for _, problem := range form.Problems {
+						<li>{ problem }</li>
+					}
+				</ul>
+			}
+			<form method="post" action="/settings/tokens" class="mt-4 grid gap-5 sm:grid-cols-2">
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<div>
+					<label for="name" class="block text-sm font-medium">Name</label>
+					<input id="name" name="name" value={ form.Name } required maxlength="100" placeholder="e.g. platform team CI" class={ inputClass }/>
+				</div>
+				<div>
+					<label for="expiry" class="block text-sm font-medium">Expires</label>
+					<select id="expiry" name="expiry" class={ inputClass }>
+						for _, o := range expiryOptions {
+							<option value={ o.Value } selected?={ o.Value == form.Expiry }>{ o.Label }</option>
+						}
+					</select>
+				</div>
+				<fieldset>
+					<legend class="text-sm font-medium">May</legend>
+					<label class="mt-2 flex items-center gap-2 text-sm">
+						<input type="checkbox" name="ingest" checked?={ form.Ingest } class="size-4 accent-indigo-600"/>
+						Submit scans
+					</label>
+					<label class="mt-2 flex items-center gap-2 text-sm">
+						<input type="checkbox" name="read" checked?={ form.Read } class="size-4 accent-indigo-600"/>
+						Read results through the API
+					</label>
+				</fieldset>
+				<div>
+					<label for="repos" class="block text-sm font-medium">Repositories it may scan</label>
+					<textarea id="repos" name="repos" rows="3" placeholder="github.com/acme/*" class={ inputClass, "font-mono" }>{ form.Repos }</textarea>
+					<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">One pattern per line, matched against the repo's host and path. Leave empty for any.</p>
+				</div>
+				<div class="sm:col-span-2">
+					<button type="submit" class="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Create token</button>
+				</div>
+			</form>
+		</section>
+		if len(tokens) == 0 {
+			@emptyState("No tokens yet") {
+				<p>Create one above for each pipeline or script.</p>
+			}
+		} else {
+			<h2 class="mt-10 text-lg font-semibold">Tokens</h2>
+			@table() {
+				<thead>
+					<tr>
+						@th("Name", false)
+						@th("May", false)
+						@th("Repositories", false)
+						@th("Created", false)
+						@th("Last used", false)
+						@th("Expires", false)
+						@th("Status", false)
+						@th("", false)
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+					for _, t := range tokens {
+						<tr>
+							<td class="px-4 py-3">
+								<div class="font-medium">{ t.Name }</div>
+								<div class="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">{ t.Prefix }…</div>
+							</td>
+							<td class="px-4 py-3 whitespace-nowrap text-slate-600 dark:text-slate-300">{ tokenAccess(t) }</td>
+							<td class="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">{ tokenRepos(t) }</td>
+							<td class="px-4 py-3 whitespace-nowrap text-slate-500 dark:text-slate-400">
+								{ formatTime(&t.CreatedAt) }
+								if t.CreatedBy != "" {
+									<div class="text-xs">by { t.CreatedBy }</div>
+								}
+							</td>
+							<td class="px-4 py-3 whitespace-nowrap text-slate-500 dark:text-slate-400">{ formatTime(t.LastUsedAt) }</td>
+							<td class="px-4 py-3 whitespace-nowrap text-slate-500 dark:text-slate-400">
+								if t.ExpiresAt == nil {
+									Never
+								} else {
+									{ formatTime(t.ExpiresAt) }
+								}
+							</td>
+							<td class="px-4 py-3">
+								@badge(tokenStatus(t, now))
+							</td>
+							<td class="px-4 py-3 text-right">
+								if tokenActive(t, now) {
+									<form method="post" action={ revokeURL(t.ID) }>
+										<input type="hidden" name="csrf" value={ csrf }/>
+										<button type="submit" class="text-sm font-medium text-rose-600 hover:text-rose-500 dark:text-rose-400">Revoke</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		}
+	}
+}
+
+const inputClass = "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-indigo-500 dark:border-slate-700 dark:bg-slate-950"
+
+templ signedOutPage() {
+	@layout("Signed out", "") {
+		<div class="py-16 text-center">
+			<h1 class="text-2xl font-semibold tracking-tight">You're signed out</h1>
+			<p class="mt-6">
+				<a href="/login" class="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Sign in again</a>
+			</p>
+		</div>
+	}
+}

@@ -119,6 +119,43 @@ func itemLink(it store.RunItem) templ.SafeURL {
 
 func runURL(id int64) templ.SafeURL { return templ.SafeURL(fmt.Sprintf("/runs/%d", id)) }
 
+func tokenStatus(t store.APIToken, now time.Time) status {
+	switch {
+	case t.RevokedAt != nil:
+		return status{"Revoked", toneMuted}
+	case t.ExpiresAt != nil && !t.ExpiresAt.After(now):
+		return status{"Expired", toneMuted}
+	default:
+		return status{"Active", toneOK}
+	}
+}
+
+func tokenActive(t store.APIToken, now time.Time) bool {
+	return tokenStatus(t, now).Tone == toneOK
+}
+
+func tokenAccess(t store.APIToken) string {
+	switch {
+	case t.CanRead && t.CanIngest:
+		return "Read and submit scans"
+	case t.CanIngest:
+		return "Submit scans"
+	default:
+		return "Read"
+	}
+}
+
+func tokenRepos(t store.APIToken) string {
+	if len(t.RepoPatterns) == 0 {
+		return "Any repository"
+	}
+	return strings.Join(t.RepoPatterns, ", ")
+}
+
+func revokeURL(id int64) templ.SafeURL {
+	return templ.SafeURL(fmt.Sprintf("/settings/tokens/%d/revoke", id))
+}
+
 // repoName is the short name a repo is shown by: the last segment of its URL
 // without ".git", e.g. "platform-network" for
 // git@github.com:acme/platform-network.git. The full URL stays available as

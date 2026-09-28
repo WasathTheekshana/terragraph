@@ -3,8 +3,6 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/WasathTheekshana/terragraph/server/internal/auth"
 	"github.com/WasathTheekshana/terragraph/server/internal/report"
+	"github.com/WasathTheekshana/terragraph/server/internal/source"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
 )
 
@@ -46,7 +46,6 @@ type Store interface {
 }
 
 type Config struct {
-	IngestToken string
 	// TrackedBranches are the branches whose project scans become the
 	// project's current state.
 	TrackedBranches []string
@@ -55,35 +54,42 @@ type Config struct {
 	UI http.Handler
 }
 
-type handler struct {
-	store     Store
-	cfg       Config
-	log       *slog.Logger
-	tokenHash [sha256.Size]byte
+// Authenticator guards routes: it lets through requests whose principal has
+// the permission and puts that principal in the request context.
+type Authenticator interface {
+	RequireAPI(perm auth.Permission, next http.Handler) http.Handler
 }
 
-func NewHandler(s Store, cfg Config, log *slog.Logger) http.Handler {
-	h := &handler{store: s, cfg: cfg, log: log, tokenHash: sha256.Sum256([]byte(cfg.IngestToken))}
+type handler struct {
+	store Store
+	cfg   Config
+	log   *slog.Logger
+}
+
+func NewHandler(s Store, a Authenticator, cfg Config, log *slog.Logger) http.Handler {
+	h := &handler{store: s, cfg: cfg, log: log}
+	read := func(f http.HandlerFunc) http.Handler { return a.RequireAPI(auth.Read, f) }
+	ingest := func(f http.HandlerFunc) http.Handler { return a.RequireAPI(auth.Ingest, f) }
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /readyz", h.readyz)
-	mux.Handle("POST /api/v1/scans", h.requireToken(http.HandlerFunc(h.createScan)))
-	mux.HandleFunc("GET /api/v1/projects", h.listProjects)
-	mux.HandleFunc("GET /api/v1/projects/{id}", h.getProject)
-	mux.HandleFunc("GET /api/v1/projects/{id}/usages", h.projectUsages)
-	mux.HandleFunc("GET /api/v1/modules", h.listModules)
-	mux.HandleFunc("GET /api/v1/modules/{id}", h.getModule)
-	mux.HandleFunc("GET /api/v1/modules/{id}/consumers", h.moduleConsumers)
-	mux.HandleFunc("GET /api/v1/modules/{id}/dependencies", h.moduleDependencies)
-	mux.HandleFunc("GET /api/v1/repos", h.listRepos)
-	mux.HandleFunc("GET /api/v1/repos/{id}", h.getRepo)
-	mux.Handle("POST /api/v1/runs", h.requireToken(http.HandlerFunc(h.createRun)))
-	mux.HandleFunc("GET /api/v1/runs", h.listRuns)
-	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
-	mux.Handle("POST /api/v1/runs/{id}/items/{item}/scan", h.requireToken(http.HandlerFunc(h.submitRunItem)))
-	mux.Handle("POST /api/v1/runs/{id}/items/{item}/fail", h.requireToken(http.HandlerFunc(h.failRunItem)))
-	mux.Handle("POST /api/v1/runs/{id}/finish", h.requireToken(http.HandlerFunc(h.finishRun)))
+	mux.Handle("POST /api/v1/scans", ingest(h.createScan))
+	mux.Handle("GET /api/v1/projects", read(h.listProjects))
+	mux.Handle("GET /api/v1/projects/{id}", read(h.getProject))
+	mux.Handle("GET /api/v1/projects/{id}/usages", read(h.projectUsages))
+	mux.Handle("GET /api/v1/modules", read(h.listModules))
+	mux.Handle("GET /api/v1/modules/{id}", read(h.getModule))
+	mux.Handle("GET /api/v1/modules/{id}/consumers", read(h.moduleConsumers))
+	mux.Handle("GET /api/v1/modules/{id}/dependencies", read(h.moduleDependencies))
+	mux.Handle("GET /api/v1/repos", read(h.listRepos))
+	mux.Handle("GET /api/v1/repos/{id}", read(h.getRepo))
+	mux.Handle("POST /api/v1/runs", ingest(h.createRun))
+	mux.Handle("GET /api/v1/runs", read(h.listRuns))
+	mux.Handle("GET /api/v1/runs/{id}", read(h.getRun))
+	mux.Handle("POST /api/v1/runs/{id}/items/{item}/scan", ingest(h.submitRunItem))
+	mux.Handle("POST /api/v1/runs/{id}/items/{item}/fail", ingest(h.failRunItem))
+	mux.Handle("POST /api/v1/runs/{id}/finish", ingest(h.finishRun))
 	// Without this, unknown API paths would fall through to the UI and get HTML.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -157,6 +163,16 @@ func (h *handler) readScan(w http.ResponseWriter, r *http.Request) (store.Scan, 
 	if err := rep.Validate(); err != nil {
 		writeInvalid(w, "invalid scan report", err)
 		return store.Scan{}, false
+	}
+
+	p, _ := auth.FromContext(r.Context())
+	if rep.ScannerType == report.ScannerTypeModuleUsage && !p.MayIngestRepo(source.RepoKey(rep.Subject.RepoURL)) {
+		writeError(w, http.StatusForbidden, fmt.Sprintf("these credentials can't submit scans for %s", rep.Subject.RepoURL))
+		return store.Scan{}, false
+	}
+	// A branch signed by the CI provider beats whatever the report claims.
+	if p.BranchVerified {
+		rep.Subject.Branch = p.Branch
 	}
 	return store.Scan{Report: rep, Raw: raw, Tracked: h.tracked(rep.Subject)}, true
 }
@@ -280,21 +296,6 @@ func nonNilUsages(get func(context.Context, int64) ([]store.Usage, error)) func(
 func (h *handler) internalError(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	h.log.ErrorContext(r.Context(), msg, "error", err, "method", r.Method, "path", r.URL.Path)
 	writeError(w, http.StatusInternalServerError, "internal server error")
-}
-
-// requireToken compares SHA-256 digests so the comparison is constant time
-// regardless of token length.
-func (h *handler) requireToken(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		got := sha256.Sum256([]byte(token))
-		if !ok || subtle.ConstantTimeCompare(got[:], h.tokenHash[:]) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="terragraph"`)
-			writeError(w, http.StatusUnauthorized, "missing or invalid bearer token")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 type statusRecorder struct {

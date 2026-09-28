@@ -20,6 +20,7 @@ import (
 
 	"github.com/a-h/templ"
 
+	"github.com/WasathTheekshana/terragraph/server/internal/auth"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
 )
 
@@ -53,35 +54,64 @@ type Store interface {
 	ListRuns(ctx context.Context, limit int) ([]store.Run, error)
 	GetRun(ctx context.Context, id int64) (store.Run, error)
 	RunItems(ctx context.Context, runID int64) ([]store.RunItem, error)
+	ListAPITokens(ctx context.Context) ([]store.APIToken, error)
+	CreateAPIToken(ctx context.Context, t store.NewAPIToken) (store.APIToken, error)
+	RevokeAPIToken(ctx context.Context, id int64, now time.Time) error
+}
+
+// Authenticator signs people in and guards pages.
+type Authenticator interface {
+	RequireUI(next http.Handler) http.Handler
+	Login(w http.ResponseWriter, r *http.Request)
+	Callback(w http.ResponseWriter, r *http.Request)
+	Logout(w http.ResponseWriter, r *http.Request)
+	ValidForm(r *http.Request, p auth.Principal) bool
+	SetErrorPage(f auth.ErrorPageFunc)
 }
 
 const runsShown = 50
 
 type handler struct {
 	store Store
+	auth  Authenticator
 	log   *slog.Logger
 	now   func() time.Time
 }
 
-func NewHandler(s Store, log *slog.Logger) http.Handler {
-	return newHandler(s, log, time.Now)
+func NewHandler(s Store, a Authenticator, log *slog.Logger) http.Handler {
+	return newHandler(s, a, log, time.Now)
 }
 
-func newHandler(s Store, log *slog.Logger, now func() time.Time) http.Handler {
-	h := &handler{store: s, log: log, now: now}
+func newHandler(s Store, a Authenticator, log *slog.Logger, now func() time.Time) http.Handler {
+	h := &handler{store: s, auth: a, log: log, now: now}
+	a.SetErrorPage(func(w http.ResponseWriter, r *http.Request, status int, title, message string) {
+		h.render(w, r, status, errorPage(status, title, message))
+	})
+	page := func(f http.HandlerFunc) http.Handler { return a.RequireUI(f) }
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", staticHandler())
-	mux.HandleFunc("GET /{$}", h.projects)
-	mux.HandleFunc("GET /repos/{id}", h.repo)
-	mux.HandleFunc("GET /projects/{id}", h.project)
-	mux.HandleFunc("GET /modules", h.modules)
-	mux.HandleFunc("GET /modules/{id}", h.module)
-	mux.HandleFunc("GET /runs", h.runs)
-	mux.HandleFunc("GET /runs/{id}", h.run)
+	mux.HandleFunc("GET /login", a.Login)
+	mux.HandleFunc("GET /auth/callback", a.Callback)
+	mux.HandleFunc("POST /logout", a.Logout)
+	mux.HandleFunc("GET /signed-out", h.signedOut)
+	mux.Handle("GET /{$}", page(h.projects))
+	mux.Handle("GET /repos/{id}", page(h.repo))
+	mux.Handle("GET /projects/{id}", page(h.project))
+	mux.Handle("GET /modules", page(h.modules))
+	mux.Handle("GET /modules/{id}", page(h.module))
+	mux.Handle("GET /runs", page(h.runs))
+	mux.Handle("GET /runs/{id}", page(h.run))
+	mux.Handle("GET /settings/tokens", page(h.tokens))
+	mux.Handle("POST /settings/tokens", page(h.createToken))
+	mux.Handle("POST /settings/tokens/{id}/revoke", page(h.revokeToken))
 	mux.HandleFunc("/", h.notFound)
 
 	return securityHeaders(mux)
+}
+
+func (h *handler) signedOut(w http.ResponseWriter, r *http.Request) {
+	h.render(w, r, http.StatusOK, signedOutPage())
 }
 
 func (h *handler) projects(w http.ResponseWriter, r *http.Request) {

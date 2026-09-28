@@ -28,8 +28,10 @@ const (
 )
 
 type Client struct {
-	BaseURL     string
-	Token       string
+	BaseURL string
+	Token   string
+	// TokenSource, when set, is asked for a token on every request instead of Token.
+	TokenSource func(context.Context) (string, error)
 	HTTP        *http.Client
 	MaxAttempts int
 	// BaseDelay is the first retry's delay; each retry doubles it.
@@ -136,8 +138,14 @@ func (c *Client) once(ctx context.Context, method, path, idempotencyKey string, 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+	token := c.Token
+	if c.TokenSource != nil {
+		if token, err = c.TokenSource(ctx); err != nil {
+			return &transientError{err: fmt.Errorf("getting a token: %w", err)}
+		}
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)

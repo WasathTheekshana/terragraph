@@ -1,6 +1,10 @@
 package web
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/WasathTheekshana/terragraph/server/internal/auth"
+)
 
 templ layout(title string, active string) {
 	@page(title, active, 0) {
@@ -30,11 +34,29 @@ templ page(title string, active string, refresh int) {
 						<img src="/static/favicon.svg" alt="" class="size-6"/>
 						terragraph
 					</a>
+					{{ p, signedIn := auth.FromContext(ctx) }}
 					<nav class="flex h-full gap-6 text-sm font-medium">
 						@navLink("/", "Projects", active == "projects")
 						@navLink("/modules", "Modules", active == "modules")
 						@navLink("/runs", "Scans", active == "runs")
+						if signedIn && p.Admin {
+							@navLink("/settings/tokens", "Settings", active == "settings")
+						}
 					</nav>
+					if signedIn {
+						<div class="ml-auto flex items-center gap-3 text-sm">
+							switch p.Kind {
+								case auth.KindUser:
+									<span class="hidden text-slate-500 sm:inline dark:text-slate-400">{ p.Name }</span>
+									<form method="post" action="/logout">
+										<input type="hidden" name="csrf" value={ p.CSRFToken }/>
+										<button type="submit" class="rounded-md border border-slate-300 px-2.5 py-1 font-medium hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Sign out</button>
+									</form>
+								case auth.KindOpen:
+									<span title="TERRAGRAPH_AUTH_DISABLED is set: anyone who can reach this server has full access." class="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-600/20 ring-inset dark:bg-amber-500/10 dark:text-amber-400 dark:ring-amber-500/20">Sign-in off</span>
+							}
+						</div>
+					}
 				</div>
 			</header>
 			<main class="mx-auto max-w-6xl px-4 py-8">

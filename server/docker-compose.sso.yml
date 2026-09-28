@@ -1,0 +1,24 @@
+# Local stack with sign-in, against a throwaway Dex identity provider:
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --build
+# Sign in as admin@example.com / password (an admin) or dev@example.com / password.
+#
+# Dex shares the server container's network, so http://localhost:5556/dex is
+# the same address for the browser and for the server, and the issuer matches.
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dev/dex.yaml:/etc/dex/config.yaml:ro
+    network_mode: "service:server"
+
+  server:
+    environment:
+      TERRAGRAPH_AUTH_DISABLED: "false"
+      TERRAGRAPH_PUBLIC_URL: http://localhost:8080
+      TERRAGRAPH_OIDC_ISSUER: http://localhost:5556/dex
+      TERRAGRAPH_OIDC_CLIENT_ID: terragraph
+      TERRAGRAPH_OIDC_CLIENT_SECRET: local-dev-secret
+      TERRAGRAPH_ADMIN_EMAILS: admin@example.com
+    ports:
+      - "127.0.0.1:5556:5556"

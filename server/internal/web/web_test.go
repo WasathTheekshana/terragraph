@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/WasathTheekshana/terragraph/server/internal/auth"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
 )
 
@@ -21,8 +23,61 @@ type fakeStore struct {
 	usages   []store.Usage
 	runs     []store.Run
 	items    []store.RunItem
+	tokens   []store.APIToken
+	created  []store.NewAPIToken
+	revoked  []int64
 	err      error
 }
+
+func (f *fakeStore) ListAPITokens(context.Context) ([]store.APIToken, error) { return f.tokens, f.err }
+
+func (f *fakeStore) CreateAPIToken(_ context.Context, t store.NewAPIToken) (store.APIToken, error) {
+	f.created = append(f.created, t)
+	return store.APIToken{ID: int64(len(f.created)), Name: t.Name}, f.err
+}
+
+func (f *fakeStore) RevokeAPIToken(_ context.Context, id int64, _ time.Time) error {
+	for _, t := range f.tokens {
+		if t.ID == id {
+			f.revoked = append(f.revoked, id)
+			return f.err
+		}
+	}
+	return store.ErrNotFound
+}
+
+// fakeAuth plays the authenticator: p is who's signed in, nil for nobody.
+type fakeAuth struct {
+	p         *auth.Principal
+	errorPage auth.ErrorPageFunc
+}
+
+func (f *fakeAuth) RequireUI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if f.p == nil {
+			http.Redirect(w, r, "/login?return_to="+r.URL.RequestURI(), http.StatusSeeOther)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), *f.p)))
+	})
+}
+
+func (f *fakeAuth) Login(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusFound) }
+func (f *fakeAuth) Callback(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusSeeOther)
+}
+func (f *fakeAuth) Logout(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusSeeOther) }
+func (f *fakeAuth) SetErrorPage(e auth.ErrorPageFunc)             { f.errorPage = e }
+
+func (f *fakeAuth) ValidForm(r *http.Request, p auth.Principal) bool {
+	return r.PostFormValue("csrf") == p.CSRFToken
+}
+
+var (
+	admin  = auth.Principal{Kind: auth.KindUser, Name: "alice@acme.io", UserID: 7, Admin: true, CanRead: true, CSRFToken: "csrf-alice"}
+	reader = auth.Principal{Kind: auth.KindUser, Name: "bob@acme.io", UserID: 8, CanRead: true, CSRFToken: "csrf-bob"}
+	open   = auth.Principal{Kind: auth.KindOpen, Admin: true, CanRead: true, CanIngest: true, CSRFToken: "csrf-open"}
+)
 
 func (f *fakeStore) ListRepos(context.Context) ([]store.Repo, error) { return f.repos, f.err }
 
@@ -170,7 +225,153 @@ func get(t *testing.T, h http.Handler, path string) (*http.Response, string) {
 var testNow = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 
 func newTestHandler(s Store) http.Handler {
-	return newHandler(s, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return testNow })
+	return newTestHandlerAs(s, &admin)
+}
+
+func newTestHandlerAs(s Store, p *auth.Principal) http.Handler {
+	return newHandler(s, &fakeAuth{p: p}, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time { return testNow })
+}
+
+func postForm(t *testing.T, h http.Handler, path string, form url.Values) (*http.Response, string) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, string(body)
+}
+
+func TestPagesRequireSignIn(t *testing.T) {
+	h := newTestHandlerAs(sampleStore(), nil)
+	for _, path := range []string{"/", "/modules", "/projects/1", "/runs", "/settings/tokens"} {
+		if resp, _ := get(t, h, path); resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/login") {
+			t.Errorf("GET %s signed out = %d %q, want a redirect to sign in", path, resp.StatusCode, resp.Header.Get("Location"))
+		}
+	}
+	for _, path := range []string{"/signed-out", "/static/favicon.svg"} {
+		if resp, _ := get(t, h, path); resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d; must stay open", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestHeaderShowsWhoIsSignedIn(t *testing.T) {
+	_, body := get(t, newTestHandlerAs(sampleStore(), &admin), "/")
+	for _, want := range []string{"alice@acme.io", `action="/logout"`, `value="csrf-alice"`, `href="/settings/tokens"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("admin header missing %q", want)
+		}
+	}
+	_, body = get(t, newTestHandlerAs(sampleStore(), &reader), "/")
+	if strings.Contains(body, `href="/settings/tokens"`) || !strings.Contains(body, "bob@acme.io") {
+		t.Error("only admins should see Settings")
+	}
+	_, body = get(t, newTestHandlerAs(sampleStore(), &open), "/")
+	if !strings.Contains(body, "Sign-in off") || strings.Contains(body, `action="/logout"`) {
+		t.Error("open mode should say sign-in is off, with no sign-out")
+	}
+}
+
+func TestTokensPageIsForAdmins(t *testing.T) {
+	h := newTestHandlerAs(sampleStore(), &reader)
+	if resp, body := get(t, h, "/settings/tokens"); resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "Admins only") {
+		t.Errorf("non-admin GET = %d", resp.StatusCode)
+	}
+	if resp, _ := postForm(t, h, "/settings/tokens", url.Values{"csrf": {"csrf-bob"}, "name": {"x"}, "ingest": {"on"}, "expiry": {"90"}}); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("non-admin POST = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestCreateToken(t *testing.T) {
+	s := sampleStore()
+	h := newTestHandlerAs(s, &admin)
+	resp, body := postForm(t, h, "/settings/tokens", url.Values{
+		"csrf": {"csrf-alice"}, "name": {"platform CI"}, "ingest": {"on"},
+		"repos": {"GitHub.com/Acme/*\n\n  github.com/acme-infra/*  "}, "expiry": {"90"},
+	})
+	if resp.StatusCode != http.StatusCreated || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("create = %d, Cache-Control %q", resp.StatusCode, resp.Header.Get("Cache-Control"))
+	}
+	if len(s.created) != 1 {
+		t.Fatalf("created %d tokens", len(s.created))
+	}
+	c := s.created[0]
+	i := strings.Index(body, "tg_")
+	if i < 0 {
+		t.Fatal("the new token isn't shown")
+	}
+	shown := body[i : i+strings.IndexAny(body[i:], "<")]
+	if string(auth.HashToken(shown)) != string(c.Hash) || !strings.HasPrefix(shown, c.Prefix) {
+		t.Error("the stored hash doesn't match the token shown")
+	}
+	if c.Name != "platform CI" || c.CanRead || !c.CanIngest || c.CreatedBy == nil || *c.CreatedBy != 7 ||
+		strings.Join(c.RepoPatterns, " ") != "github.com/acme/* github.com/acme-infra/*" {
+		t.Errorf("created = %+v", c)
+	}
+	if c.ExpiresAt == nil || !c.ExpiresAt.Equal(testNow.Add(90*24*time.Hour)) {
+		t.Errorf("expires = %v", c.ExpiresAt)
+	}
+}
+
+func TestCreateTokenValidation(t *testing.T) {
+	s := sampleStore()
+	h := newTestHandlerAs(s, &admin)
+	resp, body := postForm(t, h, "/settings/tokens", url.Values{"csrf": {"csrf-alice"}, "name": {""}, "repos": {"["}, "expiry": {"forever"}})
+	if resp.StatusCode != http.StatusUnprocessableEntity || len(s.created) != 0 {
+		t.Fatalf("invalid form = %d, created %d", resp.StatusCode, len(s.created))
+	}
+	for _, want := range []string{"Give the token a name", "Choose what the token may do", "a valid pattern", "Choose when the token expires"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing problem %q", want)
+		}
+	}
+}
+
+func TestTokenFormsNeedCSRF(t *testing.T) {
+	s := sampleStore()
+	s.tokens = []store.APIToken{{ID: 3, Name: "old", CanIngest: true}}
+	h := newTestHandlerAs(s, &admin)
+	if resp, _ := postForm(t, h, "/settings/tokens", url.Values{"csrf": {"forged"}, "name": {"x"}, "ingest": {"on"}, "expiry": {"90"}}); resp.StatusCode != http.StatusForbidden || len(s.created) != 0 {
+		t.Errorf("create with a forged csrf = %d", resp.StatusCode)
+	}
+	if resp, _ := postForm(t, h, "/settings/tokens/3/revoke", url.Values{"csrf": {"forged"}}); resp.StatusCode != http.StatusForbidden || len(s.revoked) != 0 {
+		t.Errorf("revoke with a forged csrf = %d", resp.StatusCode)
+	}
+}
+
+func TestRevokeToken(t *testing.T) {
+	s := sampleStore()
+	s.tokens = []store.APIToken{{ID: 3, Name: "old", CanIngest: true}}
+	h := newTestHandlerAs(s, &admin)
+	resp, _ := postForm(t, h, "/settings/tokens/3/revoke", url.Values{"csrf": {"csrf-alice"}})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/settings/tokens" || len(s.revoked) != 1 {
+		t.Errorf("revoke = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if resp, _ := postForm(t, h, "/settings/tokens/9/revoke", url.Values{"csrf": {"csrf-alice"}}); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("revoking an unknown token = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestTokensList(t *testing.T) {
+	s := sampleStore()
+	past, future := testNow.Add(-time.Hour), testNow.Add(time.Hour)
+	s.tokens = []store.APIToken{
+		{ID: 1, Name: "ci", Prefix: "tg_abcdefgh", CanIngest: true, RepoPatterns: []string{"github.com/acme/*"}, CreatedBy: "alice@acme.io", ExpiresAt: &future},
+		{ID: 2, Name: "reports", Prefix: "tg_ijklmnop", CanRead: true, ExpiresAt: &past},
+		{ID: 3, Name: "gone", Prefix: "tg_qrstuvwx", CanRead: true, CanIngest: true, RevokedAt: &past},
+	}
+	_, body := get(t, newTestHandlerAs(s, &admin), "/settings/tokens")
+	for _, want := range []string{"tg_abcdefgh…", "Submit scans", "github.com/acme/*", "by alice@acme.io", "Any repository",
+		"Read and submit scans", "Active", "Expired", "Revoked", `action="/settings/tokens/1/revoke"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("tokens page missing %q", want)
+		}
+	}
+	if strings.Contains(body, `action="/settings/tokens/2/revoke"`) || strings.Contains(body, `action="/settings/tokens/3/revoke"`) {
+		t.Error("only active tokens can be revoked")
+	}
 }
 
 func TestPages(t *testing.T) {

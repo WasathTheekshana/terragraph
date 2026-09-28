@@ -26,17 +26,20 @@ TAILWIND := .bin/tailwindcss-$(TAILWIND_VERSION)$(EXE)
 WEB := server/internal/web
 
 COMPOSE := docker compose -f server/docker-compose.yml
+# The same stack with sign-in against a local Dex (see server/docker-compose.sso.yml).
+COMPOSE_SSO := $(COMPOSE) -f server/docker-compose.sso.yml
 # -C runs the scanner from scanner/, so relative scan paths are made absolute first.
 SCANNER := go run -C scanner ./cmd/terragraph
 
 .DEFAULT_GOAL := help
 
-.PHONY: help up down reset logs build scan scan-sample scan-module projects modules generate vet test test-db
+.PHONY: help up up-sso down reset logs build scan scan-sample scan-module projects modules generate vet test test-db
 
 # $(info) prints from make itself, so the text isn't subject to any shell's quoting.
 help:
 	$(info Local stack:)
-	$(info make up            start Postgres and the server in the background)
+	$(info make up            start Postgres and the server in the background, sign-in off)
+	$(info make up-sso        the same with sign-in, against a local Dex (admin@example.com / password))
 	$(info make down          stop the stack, keeping its data)
 	$(info make reset         stop the stack and delete its data)
 	$(info make logs          follow the server logs)
@@ -57,13 +60,16 @@ help:
 	@exit 0
 
 up:
-	$(COMPOSE) up -d --build
+	$(COMPOSE) up -d --build --remove-orphans
+
+up-sso:
+	$(COMPOSE_SSO) up -d --build --force-recreate
 
 down:
-	$(COMPOSE) down
+	$(COMPOSE_SSO) down
 
 reset:
-	$(COMPOSE) down -v
+	$(COMPOSE_SSO) down -v
 
 logs:
 	$(COMPOSE) logs -f server
@@ -82,10 +88,10 @@ scan:
 	$(SCANNER) scan --path $(abspath $(DIR))$(if $(BRANCH), --branch $(BRANCH))$(if $(EXCLUDE), --exclude $(EXCLUDE))$(if $(CONCURRENCY), --concurrency $(CONCURRENCY))
 
 projects:
-	curl -s $(TERRAGRAPH_API_URL)/api/v1/projects
+	curl -s -H "Authorization: Bearer $(TERRAGRAPH_TOKEN)" $(TERRAGRAPH_API_URL)/api/v1/projects
 
 modules:
-	curl -s $(TERRAGRAPH_API_URL)/api/v1/modules
+	curl -s -H "Authorization: Bearer $(TERRAGRAPH_TOKEN)" $(TERRAGRAPH_API_URL)/api/v1/modules
 
 generate: $(TAILWIND)
 	go tool -C server templ generate -path internal/web

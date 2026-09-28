@@ -166,6 +166,11 @@ The server repo's migrations are authoritative; in outline:
   `modules.json`), so a project's full tree can be shown.
 - `runs`, `run_items`: each scanner run and its planned items with their status (pending, done,
   failed), error, and the scan each produced.
+- `users`, `sessions`, `login_attempts`: people who signed in (keyed by issuer and subject),
+  their sessions (stored as hashes, with admin status and CSRF token), and in-progress sign-ins
+  (single use, expire after 10 minutes).
+- `api_tokens`: tokens as SHA-256 hashes with their permissions, repo patterns, creator, last
+  use, expiry, and revocation.
 
 A project scan is applied (becomes current state) only if its branch is tracked (`main`,
 `master` by default; folders outside git always are) and it isn't older than the scan it
@@ -176,7 +181,7 @@ version at query time, so nothing derived is stored.
 
 ## 7. API (v1)
 
-- `POST /api/v1/scans`: ingest a scan report (body = schema in §5), with a shared bearer token.
+- `POST /api/v1/scans`: ingest a scan report (body = schema in §5).
 - `GET /api/v1/projects`, `GET /api/v1/projects/{id}`: projects with counts of outdated and
   major-behind module calls.
 - `GET /api/v1/projects/{id}/usages`: a project's current module calls with pinned version,
@@ -190,6 +195,27 @@ version at query time, so nothing derived is stored.
 
 The web UI pages (`/`, `/projects/{id}`, `/modules`, `/modules/{id}`, `/runs`, `/runs/{id}`)
 show the same data. The graph endpoint for the v2 graph view isn't built yet.
+
+### Authentication
+
+Everything except the health checks needs credentials, and the server refuses to start unless
+sign-in is configured or explicitly turned off for local use.
+
+- **People** sign in through the organization's OpenID Connect provider (authorization code
+  with PKCE). Sessions live in Postgres behind an HttpOnly cookie; forms carry a CSRF token and
+  are checked against the request's Origin. Admins come from a configured email list or an IdP
+  group.
+- **API tokens**, managed by admins in the UI, replace the shared static token: each can read,
+  submit scans, or both, can be limited to repo patterns, expires, records its last use, and is
+  stored only as a SHA-256 hash. The static `TERRAGRAPH_INGEST_TOKEN` remains as an optional
+  bootstrap credential.
+- **GitHub Actions** workflows submit with their OIDC ID token, so there's no secret to rotate.
+  The server verifies it against GitHub's keys, checks the owner is allowed, accepts scans only
+  of the workflow's own repo, and records the branch from the signed token rather than the report.
+
+Scope limits apply to project scans. Module repo version listings are allowed for any
+credential that can submit scans, since a project's scan lists the versions of every module repo
+it uses.
 
 ### Reliability of scan runs
 
@@ -207,7 +233,8 @@ the server later clones and scans repos itself, that work needs a durable job qu
 
 ## 8. Scanner CLI (Go)
 
-- Single static binary: `terragraph scan --path <anything> --api-url ... --token ...`.
+- Single static binary: `terragraph scan --path <anything> --api-url ... --token ...`, or
+  `--github-oidc` instead of a token in GitHub Actions.
 - Discovery: walks the path for directories with `.tf`/`.tf.json` files, skipping hidden
   directories, `node_modules`, `examples`, and `--exclude` patterns. Directories another root
   uses as a local module aren't roots. Each root's repo is found by looking for `.git` in it and
@@ -258,9 +285,10 @@ schema in §5 is the contract between them.
 
 ## 11. Open questions
 
-- Auth model for the CLI token: v1 uses one shared static token. Per-repo tokens or OIDC from
-  the CI provider (no secret to rotate) are the next step. Read endpoints are unauthenticated
-  for now, which assumes the server is only reachable inside the organization.
+- CI identity beyond GitHub: GitLab and other CI providers also issue OIDC tokens and could be
+  trusted the same way; until then they use scoped API tokens.
+- Finer read access: every signed-in user can read everything. Per-team visibility would need
+  ownership data the scanner doesn't collect yet.
 - Registry modules: their versions come from the registry, not a git repo, so "latest" is
   unknown for them until a registry version scanner exists.
 - Where module repos live relative to projects: assumed separate git remotes reachable via

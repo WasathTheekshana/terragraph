@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -22,6 +23,8 @@ type scanFlags struct {
 	concurrency        int
 	apiURL             string
 	token              string
+	githubOIDC         bool
+	oidcAudience       string
 	out                string
 	dryRun             bool
 }
@@ -48,6 +51,12 @@ node_modules, and examples are skipped. Use --exclude for anything else.`,
 			if f.token == "" {
 				f.token = os.Getenv("TERRAGRAPH_TOKEN")
 			}
+			if !cmd.Flags().Changed("github-oidc") {
+				f.githubOIDC, _ = strconv.ParseBool(os.Getenv("TERRAGRAPH_GITHUB_OIDC"))
+			}
+			if f.githubOIDC && f.token != "" {
+				return fmt.Errorf("use either --github-oidc or a token, not both")
+			}
 			return runScan(cmd.Context(), f)
 		},
 	}
@@ -63,6 +72,8 @@ node_modules, and examples are skipped. Use --exclude for anything else.`,
 	fl.IntVar(&f.concurrency, "concurrency", 4, "items to scan at the same time")
 	fl.StringVar(&f.apiURL, "api-url", "", "TerraGraph server base URL (default: env TERRAGRAPH_API_URL)")
 	fl.StringVar(&f.token, "token", "", "auth token for the TerraGraph server (default: env TERRAGRAPH_TOKEN)")
+	fl.BoolVar(&f.githubOIDC, "github-oidc", false, "in GitHub Actions, sign in with the workflow's ID token instead of a token (default: env TERRAGRAPH_GITHUB_OIDC)")
+	fl.StringVar(&f.oidcAudience, "oidc-audience", "terragraph", "audience to request for --github-oidc; must match the server's TERRAGRAPH_GITHUB_OIDC_AUDIENCE")
 	fl.StringVar(&f.out, "out", "", "also write the reports to this file as a JSON array")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "print the reports instead of submitting them")
 	return cmd
@@ -79,8 +90,16 @@ func runScan(ctx context.Context, f scanFlags) error {
 		return collect(ctx, f, targets)
 	}
 
+	c := client.New(strings.TrimRight(f.apiURL, "/"), f.token)
+	if f.githubOIDC {
+		gh, err := client.GitHubOIDCFromEnv(f.oidcAudience)
+		if err != nil {
+			return err
+		}
+		c.TokenSource = gh.Token
+	}
 	runner := &scan.Runner{
-		Client:      client.New(strings.TrimRight(f.apiURL, "/"), f.token),
+		Client:      c,
 		Concurrency: f.concurrency,
 		Out:         os.Stderr,
 		UIBase:      strings.TrimRight(f.apiURL, "/"),

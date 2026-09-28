@@ -30,7 +30,8 @@ them.
 
 | target | |
 |---|---|
-| `make up` / `make down` | start / stop the local stack |
+| `make up` / `make down` | start / stop the local stack, with sign-in off |
+| `make up-sso` | the stack with sign-in through a local Dex: `admin@example.com` / `password` (an admin) or `dev@example.com` / `password` |
 | `make reset` | stop the stack and delete its data |
 | `make logs` | follow the server logs |
 | `make scan DIR=path` | scan everything under a folder; optional `BRANCH=`, `EXCLUDE=a,b`, `CONCURRENCY=` |
@@ -42,7 +43,10 @@ them.
 
 `.env` holds the local settings: the ingest token the server accepts and the scanner sends (keep
 `TERRAGRAPH_INGEST_TOKEN` and `TERRAGRAPH_TOKEN` equal), the server URL, and the test database.
-Without a `.env`, the defaults in `.env.example` apply. `.env` is gitignored.
+Without a `.env`, the defaults in `.env.example` apply. `.env` is gitignored. With `make up-sso`,
+the ingest token still works for scans, or sign in, create a token under Settings, and put it in
+`TERRAGRAPH_TOKEN`. See [server authentication](server/README.md#authentication) for deploying
+with your own identity provider.
 
 The stack runs as the `terragraph` Compose project: containers `terragraph-postgres-1` and
 `terragraph-server-1`, data in the `terragraph_pgdata` volume, server on `http://localhost:8080`.

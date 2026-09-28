@@ -15,8 +15,19 @@ docker compose up -d
 From the repo root, `make up` does the same with the settings from `.env`; see the
 [root README](../README.md) for the other make targets.
 
-This starts Postgres and the server on `http://localhost:8080` with the ingest token `dev-token`
-(override with `TERRAGRAPH_INGEST_TOKEN`). The Compose project is named `terragraph`, so the
+This starts Postgres and the server on `http://localhost:8080` with sign-in turned off
+(`TERRAGRAPH_AUTH_DISABLED=true`) and the token `dev-token` (override with
+`TERRAGRAPH_INGEST_TOKEN`). To try sign-in locally, add the Dex override instead:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --build
+```
+
+or `make up-sso` from the repo root. Sign in as `admin@example.com` (an admin) or
+`dev@example.com`, both with password `password`. Dex shares the server container's network, so
+`http://localhost:5556/dex` is the same address for the browser and the server.
+
+The Compose project is named `terragraph`, so the
 containers are `terragraph-postgres-1` and `terragraph-server-1`, and data lives in the
 `terragraph_pgdata` volume. `docker compose down` stops the stack; `docker compose down -v` also
 deletes the data.
@@ -45,6 +56,7 @@ Server-rendered pages, no JavaScript:
 | `/modules/{id}` | which versions of a module are in use, every project using it, and, if the module's own repo was scanned, the modules it uses |
 | `/runs` | each scanner run, with its status and progress |
 | `/runs/{id}` | one run's items as they're scanned, failures first; refreshes every 2 seconds while the run is active |
+| `/settings/tokens` | admins only: create and revoke API tokens |
 
 A run with no progress for 10 minutes shows as stalled: its scanner was stopped before closing it.
 
@@ -60,12 +72,70 @@ committed output is stale.
 | variable | default | |
 |---|---|---|
 | `TERRAGRAPH_DATABASE_URL` | required | Postgres connection URL |
-| `TERRAGRAPH_INGEST_TOKEN` | required | bearer token the scanner must send; use a long random value |
+| `TERRAGRAPH_PUBLIC_URL` | required with OIDC | the URL people open, e.g. `https://terragraph.example.com`; sign-in redirects back to `<url>/auth/callback` |
+| `TERRAGRAPH_OIDC_ISSUER` | | your identity provider's issuer URL; turns sign-in on |
+| `TERRAGRAPH_OIDC_CLIENT_ID` | required with OIDC | OIDC client ID |
+| `TERRAGRAPH_OIDC_CLIENT_SECRET` | | OIDC client secret |
+| `TERRAGRAPH_OIDC_ALLOWED_DOMAINS` | any | comma-separated email domains allowed to sign in, e.g. `example.com` |
+| `TERRAGRAPH_ADMIN_EMAILS` | | comma-separated emails that are admins |
+| `TERRAGRAPH_OIDC_ADMIN_GROUP` | | members of this IdP group are admins |
+| `TERRAGRAPH_OIDC_GROUPS_CLAIM` | `groups` | ID token claim holding the user's groups |
+| `TERRAGRAPH_SESSION_TTL` | `12h` | how long a sign-in lasts |
+| `TERRAGRAPH_AUTH_DISABLED` | `false` | `true` turns sign-in off and lets anyone read and submit; local use only |
+| `TERRAGRAPH_INGEST_TOKEN` | | optional static token that can read and submit scans; prefer API tokens |
+| `TERRAGRAPH_GITHUB_OIDC_OWNERS` | | comma-separated GitHub orgs or users whose Actions workflows may submit scans without a token |
+| `TERRAGRAPH_GITHUB_OIDC_AUDIENCE` | `terragraph` | audience those workflows must request |
 | `TERRAGRAPH_ADDR` | `:8080` | listen address |
 | `TERRAGRAPH_TRACKED_BRANCHES` | `main,master` | comma-separated branches whose scans become a project's current state |
 | `TERRAGRAPH_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 
+The server won't start unless `TERRAGRAPH_OIDC_ISSUER` is set or `TERRAGRAPH_AUTH_DISABLED=true`,
+so a deployment can't be left open by accident.
+
 Migrations run automatically at startup and are safe with several replicas.
+
+## Authentication
+
+Everything except `/healthz` and `/readyz` needs credentials.
+
+**People** sign in with your identity provider (Okta, Entra ID, Google, Keycloak, Dex, or any
+OpenID Connect provider) using the authorization code flow with PKCE. Register a web client with
+the redirect URI `<TERRAGRAPH_PUBLIC_URL>/auth/callback` and the scopes `openid profile email`.
+Signed-in users can read everything; admins (from `TERRAGRAPH_ADMIN_EMAILS` or
+`TERRAGRAPH_OIDC_ADMIN_GROUP`) also manage API tokens. Sessions are stored in Postgres in an
+HttpOnly cookie, and forms are protected against cross-site requests. Admin status is decided at
+sign-in, so a change takes effect at the next sign-in.
+
+**API tokens** are created by admins under Settings. Each token:
+
+- can read, submit scans, or both;
+- can be limited to repos matching patterns like `github.com/acme/*` (submitting scans only;
+  module repo version checks are always allowed);
+- expires after 30, 90, or 365 days, or never;
+- is shown once, stored only as a SHA-256 hash, and starts with `tg_` so secret scanners can
+  spot it;
+- records when it was last used, and can be revoked at once.
+
+Send it as `Authorization: Bearer tg_...`; the scanner reads it from `TERRAGRAPH_TOKEN`.
+
+**GitHub Actions** workflows can submit scans with no stored secret. Set
+`TERRAGRAPH_GITHUB_OIDC_OWNERS` to your org, and run the scanner with `--github-oidc`. The server
+verifies the workflow's ID token and only accepts scans of the workflow's own repo, and the branch
+recorded is the one in the signed token, not the one the report claims:
+
+```yaml
+jobs:
+  terragraph:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: terragraph scan --path . --github-oidc
+        env:
+          TERRAGRAPH_API_URL: https://terragraph.example.com
+```
 
 ## Current state
 
@@ -106,7 +176,7 @@ All responses are JSON. Errors look like `{"error": "...", "details": ["..."]}`.
 
 | method | path | |
 |---|---|---|
-| `POST` | `/api/v1/scans` | ingest a scan report; needs `Authorization: Bearer <token>` |
+| `POST` | `/api/v1/scans` | ingest a scan report |
 | `GET` | `/api/v1/projects` | projects with counts of outdated module calls |
 | `GET` | `/api/v1/projects/{id}` | one project, with the same counts |
 | `GET` | `/api/v1/projects/{id}/usages` | a project's module calls with pinned and latest versions |
@@ -123,10 +193,13 @@ All responses are JSON. Errors look like `{"error": "...", "details": ["..."]}`.
 | `GET` | `/healthz` | liveness; doesn't touch the database |
 | `GET` | `/readyz` | readiness; checks the database |
 
-All `POST` endpoints need `Authorization: Bearer <token>`.
+Every endpoint except `/healthz` and `/readyz` needs `Authorization: Bearer <token>` (or a
+signed-in browser session for `GET`s). `GET`s need read access and `POST`s need scan submission
+access; missing or bad credentials get `401`, and credentials without the access, or scoped to
+other repos, get `403`.
 
 `POST /api/v1/scans` returns `201` with `{"scan_id": 12, "applied": true}`, `401` for a bad token,
-`415` for a non-JSON body, `413` above 10 MiB, `400` for malformed JSON, and `422` listing every
+`403` for a repo outside the token's scope, `415` for a non-JSON body, `413` above 10 MiB, `400` for malformed JSON, and `422` listing every
 validation problem.
 
 The run endpoints are what the scanner uses, and every one is safe to retry:

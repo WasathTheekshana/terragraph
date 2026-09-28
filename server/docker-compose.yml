@@ -23,6 +23,8 @@ services:
     environment:
       TERRAGRAPH_DATABASE_URL: postgres://terragraph:terragraph@postgres:5432/terragraph?sslmode=disable
       TERRAGRAPH_INGEST_TOKEN: ${TERRAGRAPH_INGEST_TOKEN:-dev-token}
+      # Local only: no sign-in. docker-compose.sso.yml turns sign-in on.
+      TERRAGRAPH_AUTH_DISABLED: "true"
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

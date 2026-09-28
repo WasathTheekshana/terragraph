@@ -18,7 +18,7 @@ go build -o terragraph ./cmd/terragraph
 
 ```sh
 export TERRAGRAPH_API_URL=http://localhost:8080
-export TERRAGRAPH_TOKEN=dev-token        # the server's ingest token
+export TERRAGRAPH_TOKEN=tg_...           # an API token from Settings; dev-token for make up
 
 ./terragraph scan --path ~/next-projects
 ```
@@ -73,6 +73,13 @@ step notices.
 | `--mode module-repo --repo-url URL` | only list one module repo's versions, e.g. in its own pipeline |
 | `--dry-run`, `--out FILE` | print or save the reports as a JSON array instead of submitting |
 | `--api-url`, `--token` | server and token; default to `TERRAGRAPH_API_URL` and `TERRAGRAPH_TOKEN` |
+| `--github-oidc` | in GitHub Actions, sign in with the workflow's ID token instead of a token (or `TERRAGRAPH_GITHUB_OIDC=true`); needs `permissions: id-token: write` |
+| `--oidc-audience` | audience for `--github-oidc` (default `terragraph`); must match the server's |
+
+Tokens come from an admin under Settings in the web UI. With `--github-oidc` there's no secret to
+store: the server checks the workflow's signed identity, accepts scans of that repo only, and
+takes the branch from it, so `--branch` isn't needed. See
+[server authentication](../server/README.md#authentication) for an example workflow.
 
 ### Branches
 

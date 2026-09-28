@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/WasathTheekshana/terragraph/server/internal/auth"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
 )
 
@@ -138,6 +140,27 @@ func (f *fakeStore) RunItems(context.Context, int64) ([]store.RunItem, error) {
 	return []store.RunItem{{ID: 1, Kind: store.ItemKindProject}}, nil
 }
 
+// fakeAuth accepts "Bearer test-token" as principal p and rejects the rest,
+// the way the real authenticator answers.
+type fakeAuth struct{ p auth.Principal }
+
+func (f fakeAuth) RequireAPI(perm auth.Permission, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="terragraph"`)
+			writeError(w, http.StatusUnauthorized, "missing or invalid credentials")
+			return
+		}
+		if (perm == auth.Read && !f.p.CanRead) || (perm == auth.Ingest && !f.p.CanIngest) {
+			writeError(w, http.StatusForbidden, "these credentials don't allow this")
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), f.p)))
+	})
+}
+
+var fullAccess = auth.Principal{Kind: auth.KindToken, Name: "test", CanRead: true, CanIngest: true}
+
 func newTestServer(t *testing.T, fs *fakeStore) *httptest.Server {
 	t.Helper()
 	return newTestServerWithUI(t, fs, nil)
@@ -145,9 +168,14 @@ func newTestServer(t *testing.T, fs *fakeStore) *httptest.Server {
 
 func newTestServerWithUI(t *testing.T, fs *fakeStore, ui http.Handler) *httptest.Server {
 	t.Helper()
+	return newTestServerAs(t, fs, fullAccess, ui)
+}
+
+func newTestServerAs(t *testing.T, fs *fakeStore, p auth.Principal, ui http.Handler) *httptest.Server {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	cfg := Config{IngestToken: token, TrackedBranches: []string{"main"}, UI: ui}
-	srv := httptest.NewServer(NewHandler(fs, cfg, log))
+	cfg := Config{TrackedBranches: []string{"main"}, UI: ui}
+	srv := httptest.NewServer(NewHandler(fs, fakeAuth{p}, cfg, log))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -196,7 +224,85 @@ func get(t *testing.T, url string) (*http.Response, map[string]any) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	return do(t, req)
+}
+
+func TestReadsNeedCredentials(t *testing.T) {
+	srv := newTestServer(t, &fakeStore{})
+	for _, path := range []string{"/api/v1/projects", "/api/v1/modules", "/api/v1/repos", "/api/v1/runs"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("GET %s without credentials = %d, want 401", path, resp.StatusCode)
+		}
+	}
+	for _, path := range []string{"/healthz", "/readyz"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d; health checks stay open", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestIngestOnlyCredentialsCantRead(t *testing.T) {
+	srv := newTestServerAs(t, &fakeStore{}, auth.Principal{CanIngest: true}, nil)
+	if resp, _ := get(t, srv.URL+"/api/v1/projects"); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("read with an ingest-only credential = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestScopedCredentials(t *testing.T) {
+	fs := &fakeStore{}
+	srv := newTestServerAs(t, fs, auth.Principal{CanIngest: true, RepoPatterns: []string{"github.com/org/*"}}, nil)
+	inScope := strings.Replace(validScan, "%s", "main", 1)
+	outOfScope := strings.Replace(inScope, "git@github.com:org/p.git", "git@github.com:other/p.git", 1)
+
+	if resp, body := postScan(t, srv.URL, "Bearer "+token, "application/json", inScope); resp.StatusCode != http.StatusCreated {
+		t.Errorf("in-scope scan = %d %v", resp.StatusCode, body)
+	}
+	if resp, body := postScan(t, srv.URL, "Bearer "+token, "application/json", outOfScope); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("out-of-scope scan = %d %v, want 403", resp.StatusCode, body)
+	}
+
+	run := `{"label": "l", "items": [
+		{"kind": "project", "repo_url": "git@github.com:org/a.git"},
+		{"kind": "project", "repo_url": "git@github.com:other/b.git"},
+		{"kind": "module_repo", "repo_url": "https://github.com/terraform-aws-modules/terraform-aws-vpc.git"}]}`
+	resp, body := post(t, srv.URL+"/api/v1/runs", run, nil)
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(fmt.Sprint(body["details"]), "other/b.git") || strings.Contains(fmt.Sprint(body["details"]), "org/a.git") {
+		t.Errorf("run with an out-of-scope project = %d %v; want 403 naming only that project", resp.StatusCode, body)
+	}
+	run = strings.Replace(run, `{"kind": "project", "repo_url": "git@github.com:other/b.git"},`, "", 1)
+	if resp, body := post(t, srv.URL+"/api/v1/runs", run, nil); resp.StatusCode != http.StatusCreated {
+		t.Errorf("run in scope, plus a public module repo = %d %v", resp.StatusCode, body)
+	}
+}
+
+func TestVerifiedBranchOverridesReport(t *testing.T) {
+	for _, tt := range []struct {
+		signed      string
+		wantTracked bool
+	}{{"main", true}, {"feature/x", false}, {"", false}} {
+		fs := &fakeStore{}
+		srv := newTestServerAs(t, fs, auth.Principal{CanIngest: true, Branch: tt.signed, BranchVerified: true}, nil)
+		// The report claims main whatever branch the workflow really ran on.
+		resp, _ := postScan(t, srv.URL, "Bearer "+token, "application/json", strings.Replace(validScan, "%s", "main", 1))
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		got := fs.ingested[0]
+		if got.Tracked != tt.wantTracked || got.Report.Subject.Branch != tt.signed {
+			t.Errorf("signed branch %q: tracked %v, stored branch %q", tt.signed, got.Tracked, got.Report.Subject.Branch)
+		}
+	}
 }
 
 func TestCreateScan(t *testing.T) {
@@ -246,9 +352,9 @@ func TestCreateScanErrors(t *testing.T) {
 		wantStatus  int
 		wantError   string
 	}{
-		{"no token", "", "application/json", valid, nil, http.StatusUnauthorized, "bearer token"},
-		{"wrong token", "Bearer nope", "application/json", valid, nil, http.StatusUnauthorized, "bearer token"},
-		{"not bearer", "Basic " + token, "application/json", valid, nil, http.StatusUnauthorized, "bearer token"},
+		{"no token", "", "application/json", valid, nil, http.StatusUnauthorized, "credentials"},
+		{"wrong token", "Bearer nope", "application/json", valid, nil, http.StatusUnauthorized, "credentials"},
+		{"not bearer", "Basic " + token, "application/json", valid, nil, http.StatusUnauthorized, "credentials"},
 		{"wrong content type", "Bearer " + token, "text/plain", valid, nil, http.StatusUnsupportedMediaType, "application/json"},
 		{"bad json", "Bearer " + token, "application/json", "{", nil, http.StatusBadRequest, "invalid JSON"},
 		{"invalid report", "Bearer " + token, "application/json", `{"schema_version": 1}`, nil, http.StatusUnprocessableEntity, "invalid scan report"},

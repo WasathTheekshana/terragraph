@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/WasathTheekshana/terragraph/server/internal/api"
+	"github.com/WasathTheekshana/terragraph/server/internal/auth"
 	"github.com/WasathTheekshana/terragraph/server/internal/config"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
 	"github.com/WasathTheekshana/terragraph/server/internal/web"
@@ -49,12 +50,17 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 		return err
 	}
 
+	authn := auth.New(cfg, st, log)
+	if !authn.Enabled() {
+		log.Warn("sign-in is disabled: anyone who can reach this server has full access; use only for local development")
+	}
+	go pruneAuth(ctx, st, log)
+
 	srv := &http.Server{
 		Addr: cfg.Addr,
-		Handler: api.NewHandler(st, api.Config{
-			IngestToken:     cfg.IngestToken,
+		Handler: api.NewHandler(st, authn, api.Config{
 			TrackedBranches: cfg.TrackedBranches,
-			UI:              web.NewHandler(st, log),
+			UI:              web.NewHandler(st, authn, log),
 		}, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -79,4 +85,20 @@ func run(ctx context.Context, getenv func(string) string, stdout io.Writer) erro
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// pruneAuth deletes expired sessions and sign-in attempts every hour.
+func pruneAuth(ctx context.Context, st *store.Store, log *slog.Logger) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		if err := st.PruneAuth(ctx, time.Now()); err != nil && ctx.Err() == nil {
+			log.Warn("pruning expired sessions", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }

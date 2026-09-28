@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/WasathTheekshana/terragraph/server/internal/auth"
 	"github.com/WasathTheekshana/terragraph/server/internal/report"
 	"github.com/WasathTheekshana/terragraph/server/internal/source"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
@@ -32,6 +34,10 @@ func (h *handler) createRun(w http.ResponseWriter, r *http.Request) {
 	items, err := normalizeRunItems(req)
 	if err != nil {
 		writeInvalid(w, "invalid run", err)
+		return
+	}
+	if err := itemsInScope(r, items); err != nil {
+		writeJSON(w, http.StatusForbidden, errorBody{Error: "these credentials can't submit scans for some items", Details: strings.Split(err.Error(), "\n")})
 		return
 	}
 	run, created, err := h.store.CreateRun(r.Context(), req.Label, r.Header.Get("Idempotency-Key"), items)
@@ -84,6 +90,20 @@ func normalizeRunItems(req createRunRequest) ([]store.NewRunItem, error) {
 		out = append(out, it)
 	}
 	return out, errors.Join(errs...)
+}
+
+// itemsInScope checks project items against the principal's repo scope.
+// Module repo items only record a repo's public version tags, so any
+// ingest credential may submit them.
+func itemsInScope(r *http.Request, items []store.NewRunItem) error {
+	p, _ := auth.FromContext(r.Context())
+	var errs []error
+	for _, it := range items {
+		if it.Kind == store.ItemKindProject && !p.MayIngestRepo(source.RepoKey(it.RepoURL)) {
+			errs = append(errs, fmt.Errorf("%s is outside this credential's repos", it.RepoURL))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (h *handler) submitRunItem(w http.ResponseWriter, r *http.Request) {

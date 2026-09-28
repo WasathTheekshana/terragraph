@@ -252,11 +252,9 @@ func TestProjectsShowRepoNames(t *testing.T) {
 		}
 	}
 	_, body = get(t, h, "/projects/1")
-	if !strings.Contains(body, "<title>payments · terragraph</title>") || !strings.Contains(body, `title="git@github.com:org/payments.git">payments</h1>`) {
-		t.Error("project page should be headed by the repo name, with the full URL as a tooltip")
-	}
-	if strings.Contains(body, "git@github.com:org/payments.git · ") {
-		t.Error("project page subtitle still spells out the full URL")
+	if !strings.Contains(body, "<title>payments · terragraph</title>") || !strings.Contains(body, `>payments</h1>`) ||
+		!strings.Contains(body, `dark:text-slate-300">git@github.com:org/payments.git</p>`) {
+		t.Error("project page should be headed by the repo name, with the full URL shown beneath it")
 	}
 	if !strings.Contains(body, `title="github.com/org/vpc" class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">vpc</a>`) {
 		t.Error("module calls should link modules by name, with the key as a tooltip")
@@ -272,8 +270,9 @@ func TestModulesShowNames(t *testing.T) {
 		}
 	}
 	_, body = get(t, h, "/modules/10")
-	if !strings.Contains(body, "<title>vpc · terragraph</title>") || !strings.Contains(body, `title="github.com/org/vpc">vpc</h1>`) {
-		t.Error("module page should be headed by the module name, with the key as a tooltip")
+	if !strings.Contains(body, "<title>vpc · terragraph</title>") || !strings.Contains(body, `>vpc</h1>`) ||
+		!strings.Contains(body, `dark:text-slate-300">github.com/org/vpc</p>`) {
+		t.Error("module page should be headed by the module name, with its key shown beneath it")
 	}
 }
 

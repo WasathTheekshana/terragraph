@@ -67,11 +67,12 @@ templ pageHeader(title string, subtitle string) {
 	</div>
 }
 
-// namedHeader heads a project or module page with its short name; the full
-// URL or key is kept as a tooltip.
+// namedHeader heads a project or module page with its short name and, below
+// it, the full URL or key it stands for.
 templ namedHeader(name string, full string, subtitle string) {
 	<div>
-		<h1 class="text-2xl font-semibold tracking-tight break-all" title={ full }>{ name }</h1>
+		<h1 class="text-2xl font-semibold tracking-tight break-all">{ name }</h1>
+		<p class="mt-1 font-mono text-sm break-all text-slate-600 dark:text-slate-300">{ full }</p>
 		if subtitle != "" {
 			<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{ subtitle }</p>
 		}

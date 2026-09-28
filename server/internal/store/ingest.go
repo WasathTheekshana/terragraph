@@ -73,14 +73,26 @@ func ingest(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, error) {
 func ingestModuleUsage(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, error) {
 	r := in.Report
 
+	repoKey := source.RepoKey(r.Subject.RepoURL)
+	var repoID int64
+	err := tx.QueryRow(ctx, `
+		INSERT INTO repos (repo_key, repo_url) VALUES ($1, $2)
+		ON CONFLICT (repo_key) DO UPDATE SET repo_url = EXCLUDED.repo_url
+		RETURNING id`,
+		repoKey, r.Subject.RepoURL,
+	).Scan(&repoID)
+	if err != nil {
+		return IngestResult{}, fmt.Errorf("upserting repo: %w", err)
+	}
+
 	// The upsert row-locks the project, serializing concurrent scans of it.
 	var projectID int64
 	var lastScanAt *time.Time
-	err := tx.QueryRow(ctx, `
-		INSERT INTO projects (repo_key, path, repo_url) VALUES ($1, $2, $3)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO projects (repo_id, repo_key, path, repo_url) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (repo_key, path) DO UPDATE SET repo_url = EXCLUDED.repo_url
 		RETURNING id, last_scan_at`,
-		source.RepoKey(r.Subject.RepoURL), r.Subject.ProjectPath(), r.Subject.RepoURL,
+		repoID, repoKey, r.Subject.ProjectPath(), r.Subject.RepoURL,
 	).Scan(&projectID, &lastScanAt)
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("upserting project: %w", err)
@@ -112,12 +124,12 @@ func ingestModuleUsage(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, e
 		}
 		major, minor, patch, pre := versionColumns(pinnedVersion(f))
 		rows = append(rows, []any{
-			projectID, f.CallName, moduleID, f.Source, f.RefDeclared, f.RefResolved, f.VersionResolved,
+			projectID, f.Parent, f.CallName, moduleID, f.Source, f.RefDeclared, f.RefResolved, f.VersionResolved,
 			f.ResolutionSource, f.File, f.Line, major, minor, patch, pre, scanID,
 		})
 	}
 	_, err = tx.CopyFrom(ctx, pgx.Identifier{"module_usages"}, []string{
-		"project_id", "call_name", "module_id", "source", "ref_declared", "ref_resolved", "version_resolved",
+		"project_id", "parent", "call_name", "module_id", "source", "ref_declared", "ref_resolved", "version_resolved",
 		"resolution_source", "file", "line", "major", "minor", "patch", "prerelease", "scan_id",
 	}, pgx.CopyFromRows(rows))
 	if err != nil {

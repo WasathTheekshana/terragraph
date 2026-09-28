@@ -165,6 +165,14 @@ func projectPath(p string) string {
 	return p
 }
 
+// rootLabel names a project within its repo.
+func rootLabel(p string) string {
+	if p == "." || p == "" {
+		return "repository root"
+	}
+	return p
+}
+
 func pathPrefix(p string) string {
 	if p = projectPath(p); p == "" {
 		return ""
@@ -270,11 +278,11 @@ func matches(q string, fields ...string) bool {
 	return false
 }
 
-var projectSorts = []string{"name", "calls", "outdated", "behind", "scanned"}
+var repoSorts = []string{"name", "calls", "outdated", "behind", "scanned"}
 
-func filterSortProjects(ps []store.Project, q listQuery) []store.Project {
-	out := slices.DeleteFunc(slices.Clone(ps), func(p store.Project) bool { return !matches(q.Q, p.RepoURL, p.Path) })
-	slices.SortStableFunc(out, func(a, b store.Project) int {
+func filterSortRepos(rs []store.Repo, q listQuery) []store.Repo {
+	out := slices.DeleteFunc(slices.Clone(rs), func(r store.Repo) bool { return !matches(q.Q, r.RepoURL) })
+	slices.SortStableFunc(out, func(a, b store.Repo) int {
 		var c int
 		switch q.Sort {
 		case "calls":
@@ -289,7 +297,6 @@ func filterSortProjects(ps []store.Project, q listQuery) []store.Project {
 		if c == 0 {
 			c = cmp.Or(
 				cmp.Compare(strings.ToLower(repoName(a.RepoURL)), strings.ToLower(repoName(b.RepoURL))),
-				cmp.Compare(a.Path, b.Path),
 				cmp.Compare(a.RepoURL, b.RepoURL),
 			)
 		}
@@ -299,6 +306,142 @@ func filterSortProjects(ps []store.Project, q listQuery) []store.Project {
 		return c
 	})
 	return out
+}
+
+// splitRepos separates repos deployed as projects from repos that are shared
+// modules' sources, which are shown under Modules instead.
+func splitRepos(rs []store.Repo) (projects []store.Repo, moduleSources int) {
+	for _, r := range rs {
+		if r.ModuleID != nil {
+			moduleSources++
+			continue
+		}
+		projects = append(projects, r)
+	}
+	return projects, moduleSources
+}
+
+// repoLink goes straight to a repo's project when it has only one.
+func repoLink(r store.Repo) templ.SafeURL {
+	if r.ProjectID != nil {
+		return projectURL(*r.ProjectID)
+	}
+	return repoURL(r.ID)
+}
+
+func repoURL(id int64) templ.SafeURL { return templ.SafeURL(fmt.Sprintf("/repos/%d", id)) }
+
+func repoBranch(r store.Repo) string {
+	switch {
+	case r.SeveralBranches:
+		return "several"
+	case r.Branch == "":
+		return "-"
+	default:
+		return r.Branch
+	}
+}
+
+// callRow is a module call placed in its tree: Depth is how many module
+// calls it's nested in.
+type callRow struct {
+	store.Usage
+	Depth int
+}
+
+// callTree orders module calls so each call is followed by the calls nested
+// inside it.
+func callTree(us []store.Usage) []callRow {
+	children := map[string][]store.Usage{}
+	for _, u := range us {
+		children[u.Parent] = append(children[u.Parent], u)
+	}
+	out := make([]callRow, 0, len(us))
+	placed := map[string]bool{}
+	var walk func(parent string, depth int)
+	walk = func(parent string, depth int) {
+		for _, u := range children[parent] {
+			addr := address(u)
+			if placed[addr] {
+				continue
+			}
+			placed[addr] = true
+			out = append(out, callRow{Usage: u, Depth: depth})
+			walk(addr, depth+1)
+		}
+	}
+	walk("", 0)
+	// Calls whose parent wasn't reported still get shown.
+	for _, u := range us {
+		if !placed[address(u)] {
+			out = append(out, callRow{Usage: u, Depth: strings.Count(u.Parent, ".") + 1})
+		}
+	}
+	return out
+}
+
+func address(u store.Usage) string {
+	if u.Parent == "" {
+		return u.CallName
+	}
+	return u.Parent + "." + u.CallName
+}
+
+// Tailwind needs literal class names, so indentation is a fixed set.
+var depthIndent = []string{"", "ml-5", "ml-10", "ml-15", "ml-20"}
+
+func indent(depth int) string {
+	return depthIndent[min(depth, len(depthIndent)-1)]
+}
+
+// via describes where a nested call sits, e.g. "inside addons".
+func via(parent string) string {
+	if parent == "" {
+		return ""
+	}
+	return "inside " + strings.ReplaceAll(parent, ".", " › ")
+}
+
+func nestedCount(us []store.Usage) int {
+	n := 0
+	for _, u := range us {
+		if u.Parent != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// hasUnexpandedRemoteModules reports whether some remote module's own calls
+// couldn't be listed because the project wasn't terraform init'd.
+func hasUnexpandedRemoteModules(us []store.Usage) bool {
+	for _, u := range us {
+		if u.Parent == "" && u.ModuleID != nil && u.ResolutionSource != "modules-json" {
+			return true
+		}
+	}
+	return false
+}
+
+// pathGroup is one Terraform root's calls, for repos holding several.
+type pathGroup struct {
+	Path string
+	Rows []callRow
+}
+
+func groupByPath(us []store.Usage) []pathGroup {
+	var groups []pathGroup
+	byPath := map[string][]store.Usage{}
+	for _, u := range us {
+		if _, ok := byPath[u.ProjectPath]; !ok {
+			groups = append(groups, pathGroup{Path: u.ProjectPath})
+		}
+		byPath[u.ProjectPath] = append(byPath[u.ProjectPath], u)
+	}
+	for i := range groups {
+		groups[i].Rows = callTree(byPath[groups[i].Path])
+	}
+	return groups
 }
 
 var moduleSorts = []string{"name", "consumers", "outdated", "scanned"}
@@ -343,16 +486,17 @@ func compareTime(a, b *time.Time) int {
 	}
 }
 
-type projectsSummary struct {
-	Projects, Calls, Outdated, Behind int
+type reposSummary struct {
+	Repos, Projects, Calls, Outdated, Behind int
 }
 
-func summarizeProjects(ps []store.Project) projectsSummary {
-	s := projectsSummary{Projects: len(ps)}
-	for _, p := range ps {
-		s.Calls += p.ModuleCalls
-		s.Outdated += p.OutdatedCalls
-		s.Behind += p.MajorBehindCalls
+func summarizeRepos(rs []store.Repo) reposSummary {
+	s := reposSummary{Repos: len(rs)}
+	for _, r := range rs {
+		s.Projects += r.Projects
+		s.Calls += r.ModuleCalls
+		s.Outdated += r.OutdatedCalls
+		s.Behind += r.MajorBehindCalls
 	}
 	return s
 }

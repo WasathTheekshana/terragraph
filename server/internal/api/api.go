@@ -31,6 +31,10 @@ type Store interface {
 	ListModules(ctx context.Context) ([]store.Module, error)
 	GetModule(ctx context.Context, id int64) (store.Module, error)
 	ModuleConsumers(ctx context.Context, moduleID int64) ([]store.Usage, error)
+	ModuleDependencies(ctx context.Context, moduleID int64) ([]store.Usage, error)
+	ListRepos(ctx context.Context) ([]store.Repo, error)
+	GetRepo(ctx context.Context, id int64) (store.Repo, error)
+	RepoProjects(ctx context.Context, repoID int64) ([]store.Project, error)
 	CreateRun(ctx context.Context, label, idempotencyKey string, items []store.NewRunItem) (store.Run, []store.RunItem, error)
 	IngestRunItem(ctx context.Context, runID, itemID int64, in store.Scan) (store.IngestResult, error)
 	FailRunItem(ctx context.Context, runID, itemID int64, msg string) error
@@ -71,6 +75,9 @@ func NewHandler(s Store, cfg Config, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /api/v1/modules", h.listModules)
 	mux.HandleFunc("GET /api/v1/modules/{id}", h.getModule)
 	mux.HandleFunc("GET /api/v1/modules/{id}/consumers", h.moduleConsumers)
+	mux.HandleFunc("GET /api/v1/modules/{id}/dependencies", h.moduleDependencies)
+	mux.HandleFunc("GET /api/v1/repos", h.listRepos)
+	mux.HandleFunc("GET /api/v1/repos/{id}", h.getRepo)
 	mux.Handle("POST /api/v1/runs", h.requireToken(http.HandlerFunc(h.createRun)))
 	mux.HandleFunc("GET /api/v1/runs", h.listRuns)
 	mux.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
@@ -207,6 +214,39 @@ func (h *handler) getModule(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) moduleConsumers(w http.ResponseWriter, r *http.Request) {
 	getByID(h, w, r, "module", "usages", nonNilUsages(h.store.ModuleConsumers))
+}
+
+func (h *handler) moduleDependencies(w http.ResponseWriter, r *http.Request) {
+	getByID(h, w, r, "module", "usages", nonNilUsages(h.store.ModuleDependencies))
+}
+
+func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
+	repos, err := h.store.ListRepos(r.Context())
+	if err != nil {
+		h.internalError(w, r, "listing repos", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repos": nonNil(repos)})
+}
+
+func (h *handler) getRepo(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathInt(w, r, "id", "repo")
+	if !ok {
+		return
+	}
+	repo, err := h.store.GetRepo(r.Context(), id)
+	if err == nil {
+		var projects []store.Project
+		if projects, err = h.store.RepoProjects(r.Context(), id); err == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "projects": nonNil(projects)})
+			return
+		}
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "repo not found")
+		return
+	}
+	h.internalError(w, r, "getting repo", err)
 }
 
 // getByID serves the result of get for the {id} path value as {key: result}.

@@ -391,6 +391,139 @@ func TestRootsInOneRepoAreSeparateProjects(t *testing.T) {
 	}
 }
 
+func TestReposGroupProjects(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	vpc := report.Fact{CallName: "vpc", Source: "git::https://github.com/org/vpc.git?ref=v1.0.0", RefDeclared: "v1.0.0"}
+	for _, sc := range []struct{ repo, path, branch string }{
+		{"git@github.com:org/infra.git", "envs/dev", "main"},
+		{"git@github.com:org/infra.git", "envs/prod", "main"},
+		{"https://github.com/org/api.git", "", "main"},
+		{"https://github.com/org/mixed.git", "a", "main"},
+		{"https://github.com/org/mixed.git", "b", "master"},
+	} {
+		r := projectScan(sc.repo, sc.branch, t0, vpc)
+		r.Subject.Path = sc.path
+		mustIngest(t, s, r, true)
+	}
+
+	repos, err := s.ListRepos(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byURL := map[string]Repo{}
+	for _, r := range repos {
+		byURL[r.RepoURL] = r
+	}
+	infra, api, mixed := byURL["git@github.com:org/infra.git"], byURL["https://github.com/org/api.git"], byURL["https://github.com/org/mixed.git"]
+	if len(repos) != 3 || infra.Projects != 2 || infra.ProjectID != nil || infra.ProjectPath != "" || infra.ModuleCalls != 2 || infra.Branch != "main" {
+		t.Errorf("infra = %+v (of %d repos)", infra, len(repos))
+	}
+	if api.Projects != 1 || api.ProjectID == nil || api.ProjectPath != "." || api.ModuleID != nil {
+		t.Errorf("api = %+v; a single-project repo should link straight to its project", api)
+	}
+	if mixed.Branch != "" || !mixed.SeveralBranches || infra.SeveralBranches {
+		t.Errorf("mixed = %q/%v, infra several = %v; want several only when projects differ", mixed.Branch, mixed.SeveralBranches, infra.SeveralBranches)
+	}
+
+	projects, err := s.RepoProjects(ctx, infra.ID)
+	if err != nil || len(projects) != 2 || projects[0].Path != "envs/dev" || projects[0].RepoID != infra.ID {
+		t.Errorf("RepoProjects = %+v, %v", projects, err)
+	}
+	if _, err := s.RepoProjects(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("RepoProjects(999) = %v, want ErrNotFound", err)
+	}
+	if got, err := s.GetRepo(ctx, api.ID); err != nil || got.ID != api.ID {
+		t.Errorf("GetRepo = %+v, %v", got, err)
+	}
+}
+
+func TestSharedModuleRepo(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// A project uses the vpc module, and the vpc module's own repo was scanned
+	// too: it calls a subnets module.
+	mustIngest(t, s, projectScan("https://github.com/org/app.git", "main", t0,
+		report.Fact{CallName: "vpc", Source: "git::https://github.com/org/vpc.git?ref=v1.0.0", RefDeclared: "v1.0.0"}), true)
+	mustIngest(t, s, projectScan("git@github.com:org/vpc.git", "main", t0,
+		report.Fact{CallName: "subnets", Source: "git::https://github.com/org/subnets.git?ref=v2.0.0", RefDeclared: "v2.0.0"}), true)
+	mustIngest(t, s, repoScan("https://github.com/org/subnets.git", t0, "v2.0.0", "v3.0.0"), false)
+
+	modules, err := s.ListModules(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vpc, subnets Module
+	for _, m := range modules {
+		switch m.Key {
+		case "github.com/org/vpc":
+			vpc = m
+		case "github.com/org/subnets":
+			subnets = m
+		}
+	}
+	if vpc.RepoID == nil || subnets.RepoID != nil {
+		t.Fatalf("vpc = %+v, subnets = %+v; only the scanned module repo should link to its repo", vpc, subnets)
+	}
+
+	repos, err := s.ListRepos(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range repos {
+		isModule := r.Key == "github.com/org/vpc"
+		if (r.ModuleID != nil) != isModule || (isModule && *r.ModuleID != vpc.ID) {
+			t.Errorf("repo %s module = %v, want set only for the vpc repo", r.Key, r.ModuleID)
+		}
+	}
+
+	deps, err := s.ModuleDependencies(ctx, vpc.ID)
+	if err != nil || len(deps) != 1 || deps[0].CallName != "subnets" || deref(deps[0].MajorsBehind) != 1 {
+		t.Errorf("vpc dependencies = %+v, %v; want subnets, one major behind", deps, err)
+	}
+	if deps, err := s.ModuleDependencies(ctx, subnets.ID); err != nil || len(deps) != 0 {
+		t.Errorf("unscanned module dependencies = %+v, %v; want none", deps, err)
+	}
+}
+
+func TestNestedUsages(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	res := mustIngest(t, s, projectScan("https://github.com/org/app.git", "main", t0,
+		report.Fact{CallName: "addons", Source: "./modules/addons"},
+		report.Fact{CallName: "vpc", Parent: "addons", Source: "git::https://github.com/org/vpc.git?ref=v1.0.0", RefDeclared: "v1.0.0"},
+		report.Fact{CallName: "vpc", Source: "git::https://github.com/org/vpc.git?ref=v2.0.0", RefDeclared: "v2.0.0"},
+	), true)
+	if !res.Applied {
+		t.Fatal("not applied")
+	}
+
+	projects, err := s.ListProjects(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usages, err := s.ProjectUsages(ctx, projects[0].ID)
+	if err != nil || len(usages) != 3 {
+		t.Fatalf("usages = %+v, %v", usages, err)
+	}
+	var nested *Usage
+	for i := range usages {
+		if usages[i].Parent == "addons" {
+			nested = &usages[i]
+		}
+	}
+	if nested == nil || nested.CallName != "vpc" || deref(nested.PinnedVersion) != "1.0.0" {
+		t.Errorf("nested usage = %+v", nested)
+	}
+
+	modules, _ := s.ListModules(ctx)
+	consumers, err := s.ModuleConsumers(ctx, modules[0].ID)
+	if err != nil || len(consumers) != 2 || modules[0].Consumers != 1 {
+		t.Errorf("consumers = %+v, %v; module %+v; want both calls from one project", consumers, err, modules[0])
+	}
+}
+
 func newRun(t *testing.T, s *Store, items ...NewRunItem) (Run, []RunItem) {
 	t.Helper()
 	run, got, err := s.CreateRun(context.Background(), "test run", "", items)

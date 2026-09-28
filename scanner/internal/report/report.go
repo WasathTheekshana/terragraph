@@ -53,7 +53,11 @@ type Fact struct {
 	Type FactType `json:"type"`
 
 	// module_call fields
-	CallName         string           `json:"call_name,omitempty"`
+	CallName string `json:"call_name,omitempty"`
+	// Parent is the dotted path of module calls this call is made inside,
+	// e.g. "addons" for a call in the module called "addons". Empty for calls
+	// in the root itself.
+	Parent           string           `json:"parent,omitempty"`
 	Source           string           `json:"source,omitempty"`
 	RefDeclared      string           `json:"ref_declared,omitempty"`
 	RefResolved      string           `json:"ref_resolved,omitempty"`

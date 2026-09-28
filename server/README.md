@@ -38,10 +38,11 @@ Server-rendered pages, no JavaScript:
 
 | page | |
 |---|---|
-| `/` | projects, with counts of outdated and major-behind module calls; searchable and sortable |
-| `/projects/{id}` | a project's module calls, each with its pinned version, latest version, and status |
+| `/` | repositories, with counts of outdated and major-behind module calls; searchable and sortable. A repo with one Terraform project links straight to it |
+| `/repos/{id}` | a repo holding several Terraform projects, and each project's counts |
+| `/projects/{id}` | a project's module calls as a tree: calls made inside other modules are indented under them and marked nested |
 | `/modules` | modules with their latest release and how many projects use them |
-| `/modules/{id}` | which versions of a module are in use, and every project using it |
+| `/modules/{id}` | which versions of a module are in use, every project using it, and, if the module's own repo was scanned, the modules it uses |
 | `/runs` | each scanner run, with its status and progress |
 | `/runs/{id}` | one run's items as they're scanned, failures first; refreshes every 2 seconds while the run is active |
 
@@ -67,6 +68,14 @@ committed output is stale.
 Migrations run automatically at startup and are safe with several replicas.
 
 ## Current state
+
+A repo that projects use as a module (its URL matches a module source) is a shared module's
+source: it's listed under Modules rather than Projects, and its module calls show as what that
+module uses.
+
+Calls made inside modules are stored with the path of calls leading to them (`parent`), so a
+project's page shows its whole tree: local modules always, and remote modules' own calls when the
+project was `terraform init`'d before scanning.
 
 A project is one Terraform root: a repo plus the root's path inside it, so `envs/dev` and
 `envs/prod` of one repo are separate projects.
@@ -104,6 +113,8 @@ All responses are JSON. Errors look like `{"error": "...", "details": ["..."]}`.
 | `GET` | `/api/v1/modules` | modules with their latest version and consumer counts |
 | `GET` | `/api/v1/modules/{id}` | one module, with the same fields |
 | `GET` | `/api/v1/modules/{id}/consumers` | every project calling a module (its blast radius) |
+| `GET` | `/api/v1/modules/{id}/dependencies` | the module calls in the module's own repo, if it was scanned |
+| `GET` | `/api/v1/repos`, `/api/v1/repos/{id}` | repos with their projects' combined counts; one repo with its projects |
 | `POST` | `/api/v1/runs` | start a run: `{"label": "...", "items": [{"kind": "project", "repo_url": "...", "path": "envs/prod"}, {"kind": "module_repo", "repo_url": "..."}]}` |
 | `POST` | `/api/v1/runs/{id}/items/{item}/scan` | submit an item's scan report and mark it done |
 | `POST` | `/api/v1/runs/{id}/items/{item}/fail` | mark an item failed: `{"error": "..."}` |
@@ -135,6 +146,7 @@ A usage looks like:
   "project_id": 2,
   "project_repo_url": "git@github.com:example-org/payments.git",
   "project_path": ".",
+  "parent": "",
   "call_name": "vpc",
   "module_id": 1,
   "module_key": "github.com/terraform-aws-modules/terraform-aws-vpc",

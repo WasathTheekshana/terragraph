@@ -89,4 +89,31 @@ func TestResolveNilManifest(t *testing.T) {
 	if _, ok := m.Resolve("anything"); ok {
 		t.Error("nil manifest resolved a module")
 	}
+	if _, ok := m.Dir("anything"); ok {
+		t.Error("nil manifest has a module dir")
+	}
+}
+
+func TestDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".terraform", "modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"Modules":[
+		{"Key":"eks","Source":"x","Dir":".terraform/modules/eks"},
+		{"Key":"eks.kms","Source":"y","Dir":".terraform/modules/eks.kms"}
+	]}`
+	if err := os.WriteFile(filepath.Join(root, ".terraform", "modules", "modules.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok := m.Dir("eks.kms"); !ok || dir != filepath.Join(root, ".terraform", "modules", "eks.kms") {
+		t.Errorf("Dir(eks.kms) = %q, %v", dir, ok)
+	}
+	if _, ok := m.Dir("missing"); ok {
+		t.Error("Dir of an unknown call")
+	}
 }

@@ -62,9 +62,11 @@ server learns about a release as soon as it's tagged.
 
 - **Organization**: top-level tenant (single-org is fine for v1, but model it now so
   multi-tenant isn't a rewrite).
+- **Repo**: a git repository (or a folder outside git), holding one or more projects.
 - **Project**: one Terraform root: a repo plus the root's path inside it, so a repo with
   `envs/dev` and `envs/prod` is two projects.
-- **ModuleRepo**: a custom module's source repo (the ~10, growing to ~100s).
+- **ModuleRepo**: a custom module's source repo (the ~10, growing to ~100s). When it's also
+  scanned as a repo, its own module calls are what the module depends on.
 - **ModuleVersion**: a git tag/ref on a ModuleRepo, resolved to semver where possible.
 - **Scan**: one report submitted by the CLI: `{project/module_repo, commit, branch, timestamp, scanner_type, facts}`.
 - **ModuleUsage (edge)**: derived from the latest scan of a Project: `(project, module_repo, pinned_ref, resolved_version, source_type)`.
@@ -118,6 +120,8 @@ future scanner types don't require a schema migration on the ingest side.
 }
 ```
 
+- `parent` (module_call): for a call made inside a module, the dotted path of calls leading to
+  it, e.g. `addons` or `eks.kms`; absent for calls in the root itself.
 - `subject.path`: the root's directory inside the repo, slash-separated; `.` or absent for the
   repo root. Folders outside git have a `file://host/path` `repo_url`.
 - `ref_declared`: the `?ref=` of a git source, or the `version` constraint of a registry source.
@@ -148,6 +152,8 @@ Surface this in the UI so unresolved data is distinguishable from verified data.
 
 The server repo's migrations are authoritative; in outline:
 
+- `repos`: one per repository, keyed by normalized repo URL. A repo whose key matches a module's
+  key is that module's source: shown under Modules, with its calls as the module's dependencies.
 - `projects`: one per Terraform root, keyed by normalized repo URL and path.
 - `modules`: one per versioned unit, keyed by normalized source: a git repo (subdirectory and
   ref stripped) or a registry address. Created by whichever scan mentions it first, so project
@@ -155,7 +161,9 @@ The server repo's migrations are authoritative; in outline:
 - `module_versions`: a module repo's tags, with semver parts when the tag is an exact version.
 - `scans`: every report as submitted (append-only history and audit).
 - `module_usages`: each project's current module calls, replaced as a whole when a scan is
-  applied, with the exact version pinned.
+  applied, with the exact version pinned. Calls made inside modules are included, keyed by
+  `parent`, the dotted path of calls leading to them (Terraform's own addressing in
+  `modules.json`), so a project's full tree can be shown.
 - `runs`, `run_items`: each scanner run and its planned items with their status (pending, done,
   failed), error, and the scan each produced.
 

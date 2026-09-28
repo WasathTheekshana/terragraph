@@ -82,6 +82,19 @@ func (m *Manifest) Resolve(callName string) (Resolution, bool) {
 	return r, r.Commit != "" || r.Version != ""
 }
 
+// Dir returns where Terraform installed the module call at address, a dotted
+// path such as "eks.kms" for the kms call inside module eks.
+func (m *Manifest) Dir(address string) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	entry, ok := m.entries[address]
+	if !ok || entry.Dir == "" {
+		return "", false
+	}
+	return filepath.Join(m.rootDir, filepath.FromSlash(entry.Dir)), true
+}
+
 // commit returns HEAD of dir, or "" unless dir is inside its own git clone
 // under .terraform/modules.
 func (m *Manifest) commit(dir string) string {

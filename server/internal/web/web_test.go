@@ -15,12 +15,50 @@ import (
 )
 
 type fakeStore struct {
+	repos    []store.Repo
 	projects []store.Project
 	modules  []store.Module
 	usages   []store.Usage
 	runs     []store.Run
 	items    []store.RunItem
 	err      error
+}
+
+func (f *fakeStore) ListRepos(context.Context) ([]store.Repo, error) { return f.repos, f.err }
+
+func (f *fakeStore) GetRepo(_ context.Context, id int64) (store.Repo, error) {
+	for _, r := range f.repos {
+		if r.ID == id {
+			return r, f.err
+		}
+	}
+	return store.Repo{}, store.ErrNotFound
+}
+
+func (f *fakeStore) RepoProjects(_ context.Context, id int64) ([]store.Project, error) {
+	var out []store.Project
+	for _, p := range f.projects {
+		if p.RepoID == id {
+			out = append(out, p)
+		}
+	}
+	return out, f.err
+}
+
+func (f *fakeStore) ModuleDependencies(ctx context.Context, id int64) ([]store.Usage, error) {
+	m, err := f.GetModule(ctx, id)
+	if err != nil || m.RepoID == nil {
+		return nil, err
+	}
+	var out []store.Usage
+	for _, u := range f.usages {
+		for _, p := range f.projects {
+			if p.ID == u.ProjectID && p.RepoID == *m.RepoID {
+				out = append(out, u)
+			}
+		}
+	}
+	return out, f.err
 }
 
 func (f *fakeStore) ListRuns(context.Context, int) ([]store.Run, error) { return f.runs, f.err }
@@ -36,8 +74,7 @@ func (f *fakeStore) GetRun(_ context.Context, id int64) (store.Run, error) {
 
 func (f *fakeStore) RunItems(context.Context, int64) ([]store.RunItem, error) { return f.items, f.err }
 
-func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.projects, f.err }
-func (f *fakeStore) ListModules(context.Context) ([]store.Module, error)   { return f.modules, f.err }
+func (f *fakeStore) ListModules(context.Context) ([]store.Module, error) { return f.modules, f.err }
 
 func (f *fakeStore) GetProject(_ context.Context, id int64) (store.Project, error) {
 	for _, p := range f.projects {
@@ -79,24 +116,44 @@ func (f *fakeStore) ModuleConsumers(_ context.Context, id int64) ([]store.Usage,
 
 func sampleStore() *fakeStore {
 	scanned := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	const payments, network, infra, vpcRepo = "git@github.com:org/payments.git", "https://github.com/org/network.git",
+		"git@github.com:org/infra.git", "https://github.com/org/vpc.git"
 	return &fakeStore{
+		repos: []store.Repo{
+			{ID: 1, RepoURL: payments, Projects: 1, ProjectID: ptr(int64(1)), ProjectPath: ".", Branch: "main", LastScanAt: &scanned,
+				ModuleCalls: 3, OutdatedCalls: 1, MajorBehindCalls: 1},
+			{ID: 2, RepoURL: network, Projects: 1, ProjectID: ptr(int64(2)), ProjectPath: ".", Branch: "main", LastScanAt: &scanned, ModuleCalls: 1},
+			{ID: 3, RepoURL: infra, Projects: 2, Branch: "main", LastScanAt: &scanned, ModuleCalls: 2, OutdatedCalls: 2},
+			// The vpc module's own repo: projects use it as a module.
+			{ID: 4, RepoURL: vpcRepo, Projects: 1, ProjectID: ptr(int64(5)), ProjectPath: ".", ModuleID: ptr(int64(10)), Branch: "main", LastScanAt: &scanned},
+		},
 		projects: []store.Project{
-			{ID: 1, RepoURL: "git@github.com:org/payments.git", LastBranch: "main", LastCommitSHA: "908ac9f4c548", LastScanAt: &scanned,
-				ModuleCalls: 2, OutdatedCalls: 1, MajorBehindCalls: 1},
-			{ID: 2, RepoURL: "https://github.com/org/network.git", LastBranch: "main", LastScanAt: &scanned, ModuleCalls: 1},
+			{ID: 1, RepoID: 1, RepoURL: payments, Path: ".", LastBranch: "main", LastCommitSHA: "908ac9f4c548", LastScanAt: &scanned,
+				ModuleCalls: 3, OutdatedCalls: 1, MajorBehindCalls: 1},
+			{ID: 2, RepoID: 2, RepoURL: network, Path: ".", LastBranch: "main", LastScanAt: &scanned, ModuleCalls: 1},
+			{ID: 3, RepoID: 3, RepoURL: infra, Path: "envs/dev", LastBranch: "main", LastScanAt: &scanned, ModuleCalls: 1, OutdatedCalls: 1},
+			{ID: 4, RepoID: 3, RepoURL: infra, Path: "envs/prod", LastBranch: "main", LastScanAt: &scanned, ModuleCalls: 1, OutdatedCalls: 1},
+			{ID: 5, RepoID: 4, RepoURL: vpcRepo, Path: ".", LastBranch: "main", LastScanAt: &scanned, ModuleCalls: 1},
 		},
 		modules: []store.Module{
-			{ID: 10, Key: "github.com/org/vpc", Kind: "git", Source: "https://github.com/org/vpc.git", LatestTag: ptr("v6.0.0"),
-				LatestVersion: ptr("6.0.0"), VersionsScannedAt: &scanned, Consumers: 2, OutdatedConsumers: 1},
+			{ID: 10, Key: "github.com/org/vpc", Kind: "git", Source: vpcRepo, LatestTag: ptr("v6.0.0"),
+				LatestVersion: ptr("6.0.0"), VersionsScannedAt: &scanned, Consumers: 2, OutdatedConsumers: 1, RepoID: ptr(int64(4))},
 			{ID: 11, Key: "registry.terraform.io/x/eks/aws", Kind: "registry", Source: "x/eks/aws"},
 		},
 		usages: []store.Usage{
-			{ProjectID: 1, ProjectRepoURL: "git@github.com:org/payments.git", CallName: "vpc", ModuleID: ptr(int64(10)),
-				ModuleKey: ptr("github.com/org/vpc"), PinnedVersion: ptr("5.1.0"), LatestVersion: ptr("6.0.0"), MajorsBehind: ptr(1),
+			{ProjectID: 1, ProjectRepoURL: payments, ProjectPath: ".", CallName: "vpc", ModuleID: ptr(int64(10)),
+				ModuleKey: ptr("github.com/org/vpc"), ModuleKind: ptr("git"), PinnedVersion: ptr("5.1.0"), LatestVersion: ptr("6.0.0"), MajorsBehind: ptr(1),
 				Outdated: true, File: "main.tf", Line: 1, ResolutionSource: "modules-json"},
-			{ProjectID: 1, ProjectRepoURL: "git@github.com:org/payments.git", CallName: "helpers", Source: "./modules/helpers", File: "main.tf", Line: 9},
-			{ProjectID: 2, ProjectRepoURL: "https://github.com/org/network.git", CallName: "vpc", ModuleID: ptr(int64(10)),
-				ModuleKey: ptr("github.com/org/vpc"), PinnedVersion: ptr("6.0.0"), LatestVersion: ptr("6.0.0"), MajorsBehind: ptr(0), File: "vpc.tf", Line: 4},
+			{ProjectID: 1, ProjectRepoURL: payments, ProjectPath: ".", CallName: "helpers", Source: "./modules/helpers", File: "main.tf", Line: 9},
+			{ProjectID: 1, ProjectRepoURL: payments, ProjectPath: ".", Parent: "helpers", CallName: "subnets", ModuleID: ptr(int64(12)),
+				ModuleKey: ptr("github.com/org/subnets"), ModuleKind: ptr("git"), PinnedVersion: ptr("1.0.0"), LatestVersion: ptr("1.0.0"),
+				MajorsBehind: ptr(0), File: "modules/helpers/main.tf", Line: 3},
+			{ProjectID: 2, ProjectRepoURL: network, ProjectPath: ".", CallName: "vpc", ModuleID: ptr(int64(10)),
+				ModuleKey: ptr("github.com/org/vpc"), ModuleKind: ptr("git"), PinnedVersion: ptr("6.0.0"), LatestVersion: ptr("6.0.0"), MajorsBehind: ptr(0), File: "vpc.tf", Line: 4},
+			// The vpc module's own code calls a subnets module.
+			{ProjectID: 5, ProjectRepoURL: vpcRepo, ProjectPath: ".", CallName: "subnets", ModuleID: ptr(int64(12)),
+				ModuleKey: ptr("github.com/org/subnets"), ModuleKind: ptr("git"), PinnedVersion: ptr("0.9.0"), LatestVersion: ptr("1.0.0"),
+				MajorsBehind: ptr(1), Outdated: true, File: "main.tf", Line: 2},
 		},
 	}
 }
@@ -126,7 +183,7 @@ func TestPages(t *testing.T) {
 	}{
 		{"/", 200, []string{"<title>Projects · terragraph</title>", "git@github.com:org/payments.git", `href="/projects/1"`, `aria-current="page"`}, nil},
 		{"/?q=network", 200, []string{"https://github.com/org/network.git"}, []string{"payments.git"}},
-		{"/?q=nothing-matches", 200, []string{"No projects match", "nothing-matches"}, nil},
+		{"/?q=nothing-matches", 200, []string{"No repositories match", "nothing-matches"}, nil},
 		{"/projects/1", 200, []string{"git@github.com:org/payments.git", "908ac9f", "1 major version behind", "Local module", `href="/modules/10"`, "verified"}, nil},
 		{"/modules", 200, []string{"github.com/org/vpc", "registry.terraform.io/x/eks/aws", "2 projects"}, nil},
 		{"/modules/10", 200, []string{"github.com/org/vpc", "Versions in use", "5.1.0", "6.0.0", `href="/projects/2"`}, nil},
@@ -230,16 +287,102 @@ func TestRunPageStopsRefreshing(t *testing.T) {
 
 func TestProjectPathsShown(t *testing.T) {
 	s := sampleStore()
-	s.projects[1].Path = "envs/prod"
+	s.repos[1].ProjectPath, s.projects[1].Path = "terraform", "terraform"
 	h := newTestHandler(s)
-	if _, body := get(t, h, "/"); !strings.Contains(body, "envs/prod") {
-		t.Error("projects list doesn't show the root path")
+	if _, body := get(t, h, "/"); !strings.Contains(body, ">terraform</div>") {
+		t.Error("projects list doesn't show a single project's path inside its repo")
 	}
-	if _, body := get(t, h, "/projects/2"); !strings.Contains(body, "Path envs/prod") {
+	if _, body := get(t, h, "/projects/2"); !strings.Contains(body, "Path terraform") {
 		t.Error("project page doesn't show the root path")
 	}
-	if _, body := get(t, h, "/?q=envs/prod"); !strings.Contains(body, "network.git") || strings.Contains(body, "payments.git") {
-		t.Error("search doesn't match root paths")
+}
+
+func TestReposWithSeveralProjects(t *testing.T) {
+	h := newTestHandler(sampleStore())
+
+	_, body := get(t, h, "/")
+	for _, want := range []string{`href="/repos/3"`, "2 Terraform projects", `href="/projects/1"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("projects list missing %q", want)
+		}
+	}
+
+	resp, body := get(t, h, "/repos/3")
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /repos/3 = %d", resp.StatusCode)
+	}
+	for _, want := range []string{">infra</h1>", "git@github.com:org/infra.git", `href="/projects/3"`, ">envs/dev</a>", `href="/projects/4"`, ">envs/prod</a>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("repo page missing %q", want)
+		}
+	}
+
+	_, body = get(t, h, "/projects/3")
+	if !strings.Contains(body, `href="/repos/3"`) || !strings.Contains(body, "← infra") {
+		t.Error("a project in a multi-project repo should link back to its repo")
+	}
+	if resp, _ := get(t, h, "/repos/99"); resp.StatusCode != 404 {
+		t.Errorf("unknown repo = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSharedModuleReposListedUnderModules(t *testing.T) {
+	h := newTestHandler(sampleStore())
+
+	_, body := get(t, h, "/")
+	if strings.Contains(body, ">vpc</a>") || !strings.Contains(body, "1 scanned repository is a shared module") {
+		t.Error("a repo used as a module should be left out of Projects, with a note saying where it is")
+	}
+
+	_, body = get(t, h, "/modules")
+	if !strings.Contains(body, "source scanned") {
+		t.Error("modules list should mark modules whose repo was scanned")
+	}
+
+	_, body = get(t, h, "/modules/10")
+	for _, want := range []string{"What this module uses", `href="/repos/4"`, ">subnets</span>", "1 major version behind"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("module page missing %q", want)
+		}
+	}
+
+	_, body = get(t, h, "/projects/5")
+	if !strings.Contains(body, "Projects use this repository as a shared module") || !strings.Contains(body, `href="/modules/10"`) {
+		t.Error("a shared module repo's project page should point to its module")
+	}
+}
+
+func TestNestedCallsShownAsTree(t *testing.T) {
+	_, body := get(t, newTestHandler(sampleStore()), "/projects/1")
+	helpers := strings.Index(body, ">helpers</span>")
+	subnets := strings.Index(body, ">subnets</span>")
+	if helpers < 0 || subnets < helpers {
+		t.Fatal("the nested call should come right after the module that makes it")
+	}
+	nestedRow := body[helpers:]
+	for _, want := range []string{"ml-5", "↳", ">nested</span>", `title="helpers.subnets"`} {
+		if !strings.Contains(nestedRow, want) {
+			t.Errorf("nested row missing %q", want)
+		}
+	}
+	if !strings.Contains(body, "1 call is made inside other modules") {
+		t.Error("missing the nested calls note")
+	}
+
+	_, body = get(t, newTestHandler(sampleStore()), "/modules/10")
+	if strings.Contains(body, "inside helpers") {
+		t.Error("vpc isn't nested anywhere in the sample")
+	}
+}
+
+func TestUnexpandedRemoteModulesNote(t *testing.T) {
+	s := sampleStore()
+	h := newTestHandler(s)
+	if _, body := get(t, h, "/projects/2"); !strings.Contains(body, "initialized with") {
+		t.Error("a remote module parsed from source should explain how to see what it calls")
+	}
+	if _, body := get(t, h, "/projects/1"); strings.Contains(body, "initialized with") {
+		t.Error("no note when remote modules were resolved from modules.json")
 	}
 }
 
@@ -287,7 +430,7 @@ func TestEmptyStates(t *testing.T) {
 
 func TestEscapesUserData(t *testing.T) {
 	s := sampleStore()
-	s.projects[0].RepoURL = `<script>alert(1)</script>`
+	s.repos[0].RepoURL = `<script>alert(1)</script>`
 	_, body := get(t, newTestHandler(s), "/")
 	if strings.Contains(body, "<script>") {
 		t.Error("repo URL rendered unescaped")
@@ -297,7 +440,7 @@ func TestEscapesUserData(t *testing.T) {
 func TestStoreErrorRendersErrorPage(t *testing.T) {
 	s := sampleStore()
 	s.err = errors.New("db down")
-	for _, path := range []string{"/", "/modules", "/projects/1", "/modules/10"} {
+	for _, path := range []string{"/", "/modules", "/projects/1", "/modules/10", "/repos/3"} {
 		resp, body := get(t, newTestHandler(s), path)
 		if resp.StatusCode != 500 || !strings.Contains(body, "Something went wrong") || strings.Contains(body, "db down") {
 			t.Errorf("GET %s = %d; want a 500 page that doesn't leak the error", path, resp.StatusCode)

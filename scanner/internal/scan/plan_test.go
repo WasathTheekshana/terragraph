@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/WasathTheekshana/terragraph/scanner/internal/client"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/report"
 )
 
 func write(t *testing.T, base, rel, content string) {
@@ -156,6 +157,143 @@ func TestPlanModuleRepos(t *testing.T) {
 	if got := strings.Join(urls, " "); "["+got+"]" != want {
 		t.Errorf("module repos = %v, want %s (deduplicated, registry modules skipped)", urls, want)
 	}
+}
+
+func facts(t *testing.T, dir string) map[string]report.Fact {
+	t.Helper()
+	targets, err := PlanProjects(Options{Path: dir, RepoURL: "https://github.com/org/app.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]report.Fact{}
+	for _, tg := range targets {
+		if tg.Report == nil {
+			t.Fatalf("%s: %v", tg, tg.Err)
+		}
+		for _, f := range tg.Report.Facts {
+			addr := f.CallName
+			if f.Parent != "" {
+				addr = f.Parent + "." + f.CallName
+			}
+			out[addr] = f
+		}
+	}
+	return out
+}
+
+func TestNestedLocalModules(t *testing.T) {
+	base := t.TempDir()
+	write(t, base, "envs/prod/main.tf", `module "addons" {
+  source = "../../modules/addons"
+}
+module "addons_again" {
+  source = "../../modules/addons"
+}
+`)
+	write(t, base, "modules/addons/main.tf", `module "vpc" {
+  source = "git::https://github.com/org/vpc.git?ref=v1.0.0"
+}
+module "net" {
+  source = "./net"
+}
+`)
+	write(t, base, "modules/addons/net/main.tf", vpcCall)
+
+	got := facts(t, base)
+	want := map[string]string{
+		"addons":               "",
+		"addons.vpc":           "addons",
+		"addons.net":           "addons",
+		"addons.net.vpc":       "addons.net",
+		"addons_again.vpc":     "addons_again",
+		"addons_again.net.vpc": "addons_again.net",
+	}
+	for addr, parent := range want {
+		f, ok := got[addr]
+		if !ok {
+			t.Errorf("missing %s; have %v", addr, mapKeys(got))
+			continue
+		}
+		if f.Parent != parent {
+			t.Errorf("%s parent = %q, want %q", addr, f.Parent, parent)
+		}
+	}
+	if f := got["addons.net.vpc"]; f.File != "../../modules/addons/net/main.tf" || f.Line != 1 {
+		t.Errorf("nested file = %s:%d, want it relative to the root", f.File, f.Line)
+	}
+	if got["addons"].File != "main.tf" {
+		t.Errorf("direct call file = %q", got["addons"].File)
+	}
+}
+
+func TestNestingStopsOnCycles(t *testing.T) {
+	base := t.TempDir()
+	write(t, base, "main.tf", `module "a" {
+  source = "./modules/a"
+}
+`)
+	write(t, base, "modules/a/main.tf", `module "b" {
+  source = "../b"
+}
+`)
+	write(t, base, "modules/b/main.tf", `module "a" {
+  source = "../a"
+}
+`)
+	got := facts(t, base)
+	if len(got) != 3 || got["a.b.a"].Parent != "a.b" {
+		t.Errorf("facts = %v; want a, a.b, a.b.a and no further", mapKeys(got))
+	}
+}
+
+func TestNestedRemoteModulesAfterInit(t *testing.T) {
+	base := t.TempDir()
+	write(t, base, "main.tf", `module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.0"
+}
+`)
+	write(t, base, ".terraform/modules/eks/main.tf", `module "kms" {
+  source  = "terraform-aws-modules/kms/aws"
+  version = "2.1.0"
+}
+`)
+	write(t, base, ".terraform/modules/modules.json", `{"Modules":[
+		{"Key":"","Source":"","Dir":"."},
+		{"Key":"eks","Source":"registry.terraform.io/terraform-aws-modules/eks/aws","Version":"20.8.5","Dir":".terraform/modules/eks"},
+		{"Key":"eks.kms","Source":"registry.terraform.io/terraform-aws-modules/kms/aws","Version":"2.1.0","Dir":".terraform/modules/eks.kms"}
+	]}`)
+
+	got := facts(t, base)
+	kms, ok := got["eks.kms"]
+	if !ok {
+		t.Fatalf("remote module's own call not found: %v", mapKeys(got))
+	}
+	if kms.Parent != "eks" || kms.VersionResolved != "2.1.0" || kms.ResolutionSource != report.ResolutionSourceModulesJSON {
+		t.Errorf("eks.kms = %+v", kms)
+	}
+	if kms.File != ".terraform/modules/eks/main.tf" {
+		t.Errorf("eks.kms file = %q", kms.File)
+	}
+	if got["eks"].VersionResolved != "20.8.5" {
+		t.Errorf("eks = %+v", got["eks"])
+	}
+}
+
+func TestRemoteModulesWithoutInitAreNotExpanded(t *testing.T) {
+	base := t.TempDir()
+	write(t, base, "main.tf", vpcCall)
+	if got := facts(t, base); len(got) != 1 {
+		t.Errorf("facts = %v; a remote module's code isn't on disk without init", mapKeys(got))
+	}
+}
+
+func mapKeys(m map[string]report.Fact) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestPlanEmptyFolder(t *testing.T) {

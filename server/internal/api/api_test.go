@@ -71,6 +71,25 @@ func (f *fakeStore) GetModule(_ context.Context, id int64) (store.Module, error)
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
 
+func (f *fakeStore) ModuleDependencies(ctx context.Context, id int64) ([]store.Usage, error) {
+	return f.ProjectUsages(ctx, id)
+}
+
+func (f *fakeStore) ListRepos(context.Context) ([]store.Repo, error) {
+	return []store.Repo{{ID: 7, RepoURL: "git@github.com:org/p.git", Projects: 2}}, nil
+}
+
+func (f *fakeStore) GetRepo(_ context.Context, id int64) (store.Repo, error) {
+	if _, ok := f.usages[id]; !ok {
+		return store.Repo{}, store.ErrNotFound
+	}
+	return store.Repo{ID: id, RepoURL: "git@github.com:org/p.git", Projects: 2}, nil
+}
+
+func (f *fakeStore) RepoProjects(_ context.Context, id int64) ([]store.Project, error) {
+	return []store.Project{{ID: 1, RepoID: id, Path: "envs/dev"}, {ID: 2, RepoID: id, Path: "envs/prod"}}, nil
+}
+
 func (f *fakeStore) CreateRun(_ context.Context, label, key string, items []store.NewRunItem) (store.Run, []store.RunItem, error) {
 	f.runKey, f.runItems = key, items
 	out := make([]store.RunItem, len(items))
@@ -295,6 +314,11 @@ func TestUsageEndpoints(t *testing.T) {
 		{"/api/v1/modules/7", http.StatusOK, "module"},
 		{"/api/v1/projects/7/usages", http.StatusOK, "usages"},
 		{"/api/v1/modules/7/consumers", http.StatusOK, "usages"},
+		{"/api/v1/modules/7/dependencies", http.StatusOK, "usages"},
+		{"/api/v1/repos", http.StatusOK, "repos"},
+		{"/api/v1/repos/7", http.StatusOK, "projects"},
+		{"/api/v1/repos/8", http.StatusNotFound, ""},
+		{"/api/v1/repos/x", http.StatusBadRequest, ""},
 		{"/api/v1/projects/8", http.StatusNotFound, ""},
 		{"/api/v1/modules/8", http.StatusNotFound, ""},
 		{"/api/v1/projects/8/usages", http.StatusNotFound, ""},

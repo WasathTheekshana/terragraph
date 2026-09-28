@@ -44,6 +44,12 @@ step notices.
   root uses as a local module (`source = "./modules/x"`). Each root is its own project,
   identified by its git repo's `origin` URL and its path inside the repo, so `envs/dev` and
   `envs/prod` of one repo are separate projects.
+- **Calls inside modules:** the scanner follows each module call into the module's code and
+  reports the calls it makes too, marked with the path of calls leading to them (`parent`). Local
+  modules are always followed; remote modules only when the root has been `terraform init`'d, since
+  that's when their code is on disk in `.terraform/modules`.
+- **Shared module repos:** if the folder also holds clones of your module repos, they're scanned
+  like any other repo, and the server recognizes them as the modules your projects use.
 - **Skipped:** hidden directories (`.git`, `.terraform`, ...), `node_modules`, and `examples`
   (module repos' usage examples). Add more with `--exclude name` or `--exclude path/glob`
   (repeatable).

@@ -68,6 +68,27 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
+func TestValidateNestedCalls(t *testing.T) {
+	r := validUsage()
+	nested := r.Facts[0]
+	nested.Parent = "addons"
+	r.Facts = append(r.Facts, nested)
+	if err := r.Validate(); err != nil {
+		t.Errorf("the same call name under another parent is allowed: %v", err)
+	}
+
+	r.Facts = append(r.Facts, nested)
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), `"addons.vpc" is duplicated`) {
+		t.Errorf("duplicate nested call: %v", err)
+	}
+
+	r = validUsage()
+	r.Facts[0].Parent = "addons..x"
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "facts[0].parent") {
+		t.Errorf("malformed parent: %v", err)
+	}
+}
+
 func TestProjectPath(t *testing.T) {
 	for in, want := range map[string]string{"": ".", ".": ".", "envs/prod": "envs/prod", "envs/prod/": "envs/prod", "./envs//dev": "envs/dev"} {
 		r := validUsage()

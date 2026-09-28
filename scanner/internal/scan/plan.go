@@ -16,6 +16,7 @@ import (
 	"github.com/WasathTheekshana/terragraph/scanner/internal/discover"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/gitinfo"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/gittags"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/hclscan"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/moduleinit"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/report"
 )
@@ -133,27 +134,7 @@ func projectReport(root discover.Root, t Target, commit, branch string) report.S
 	if err != nil {
 		manifest = nil
 	}
-	facts := make([]report.Fact, 0, len(root.Calls))
-	for _, c := range root.Calls {
-		f := report.Fact{
-			Type:             report.FactTypeModuleCall,
-			CallName:         c.CallName,
-			Source:           c.Source,
-			RefDeclared:      c.RefDeclared,
-			RefResolved:      c.RefDeclared,
-			ResolutionSource: report.ResolutionSourceParse,
-			File:             c.File,
-			Line:             c.Line,
-		}
-		if res, ok := manifest.Resolve(c.CallName); ok {
-			f.ResolutionSource = report.ResolutionSourceModulesJSON
-			f.VersionResolved = res.Version
-			if res.Commit != "" {
-				f.RefResolved = res.Commit
-			}
-		}
-		facts = append(facts, f)
-	}
+	facts := collectCalls(root, manifest)
 	return report.New(report.ScannerTypeModuleUsage, report.Subject{
 		Kind:      report.SubjectKindProject,
 		RepoURL:   t.RepoURL,
@@ -161,6 +142,83 @@ func projectReport(root discover.Root, t Target, commit, branch string) report.S
 		CommitSHA: commit,
 		Branch:    branch,
 	}, facts)
+}
+
+// maxNesting bounds how deep calls inside modules are followed.
+const maxNesting = 10
+
+// collectCalls lists a root's module calls and, recursively, the calls made
+// inside the modules they use: local modules from disk, and remote modules
+// from .terraform/modules when the root has been initialized. A nested
+// call's Parent is the dotted path of the calls leading to it, the same
+// addressing Terraform uses in modules.json.
+func collectCalls(root discover.Root, manifest *moduleinit.Manifest) []report.Fact {
+	var facts []report.Fact
+	onPath := map[string]bool{root.Dir: true}
+
+	var walk func(dir string, calls []hclscan.ModuleCall, parent string, depth int)
+	walk = func(dir string, calls []hclscan.ModuleCall, parent string, depth int) {
+		for _, c := range calls {
+			address := c.CallName
+			if parent != "" {
+				address = parent + "." + c.CallName
+			}
+			facts = append(facts, callFact(root.Dir, dir, parent, address, c, manifest))
+
+			childDir := moduleDir(dir, address, c.Source, manifest)
+			if childDir == "" || onPath[childDir] || depth+1 >= maxNesting {
+				continue
+			}
+			childCalls, err := hclscan.Scan(childDir)
+			if err != nil {
+				continue
+			}
+			onPath[childDir] = true
+			walk(childDir, childCalls, address, depth+1)
+			delete(onPath, childDir)
+		}
+	}
+	walk(root.Dir, root.Calls, "", 0)
+	return facts
+}
+
+func callFact(rootDir, dir, parent, address string, c hclscan.ModuleCall, manifest *moduleinit.Manifest) report.Fact {
+	f := report.Fact{
+		Type:             report.FactTypeModuleCall,
+		CallName:         c.CallName,
+		Parent:           parent,
+		Source:           c.Source,
+		RefDeclared:      c.RefDeclared,
+		RefResolved:      c.RefDeclared,
+		ResolutionSource: report.ResolutionSourceParse,
+		File:             c.File,
+		Line:             c.Line,
+	}
+	if dir != rootDir && c.File != "" {
+		if rel, err := filepath.Rel(rootDir, filepath.Join(dir, filepath.FromSlash(c.File))); err == nil {
+			f.File = filepath.ToSlash(rel)
+		}
+	}
+	if res, ok := manifest.Resolve(address); ok {
+		f.ResolutionSource = report.ResolutionSourceModulesJSON
+		f.VersionResolved = res.Version
+		if res.Commit != "" {
+			f.RefResolved = res.Commit
+		}
+	}
+	return f
+}
+
+// moduleDir is where a called module's code is on disk: where Terraform
+// installed it, or for a local module, its directory. "" when unavailable.
+func moduleDir(callerDir, address, source string, manifest *moduleinit.Manifest) string {
+	if dir, ok := manifest.Dir(address); ok {
+		return filepath.Clean(dir)
+	}
+	if strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
+		return filepath.Clean(filepath.Join(callerDir, filepath.FromSlash(source)))
+	}
+	return ""
 }
 
 // PlanModuleRepos returns one target per git repo the projects' modules come

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/url"
 	"slices"
 	"testing"
@@ -131,18 +132,16 @@ func TestModulesSortByDisplayedName(t *testing.T) {
 }
 
 func TestProjectsSortByDisplayedName(t *testing.T) {
-	ps := []store.Project{
+	rs := []store.Repo{
 		{RepoURL: "https://github.com/org/zeta.git"},
 		{RepoURL: "git@github.com:org/Alpha.git"},
-		{RepoURL: "git@github.com:org/mid.git", Path: "envs/prod"},
-		{RepoURL: "git@github.com:org/mid.git", Path: "envs/dev"},
+		{RepoURL: "git@github.com:org/mid.git"},
 	}
 	var got []string
-	for _, p := range filterSortProjects(ps, listQuery{Sort: "name"}) {
-		got = append(got, repoName(p.RepoURL)+" "+p.Path)
+	for _, r := range filterSortRepos(rs, listQuery{Sort: "name"}) {
+		got = append(got, repoName(r.RepoURL))
 	}
-	want := []string{"Alpha ", "mid envs/dev", "mid envs/prod", "zeta "}
-	if !slices.Equal(got, want) {
+	if want := []string{"Alpha", "mid", "zeta"}; !slices.Equal(got, want) {
 		t.Errorf("sorted = %q, want %q", got, want)
 	}
 }
@@ -156,11 +155,11 @@ func TestEveryToneHasBadgeClasses(t *testing.T) {
 }
 
 func TestParseListQuery(t *testing.T) {
-	q := parseListQuery(url.Values{"q": {"  vpc "}, "sort": {"calls"}, "dir": {"desc"}}, projectSorts)
+	q := parseListQuery(url.Values{"q": {"  vpc "}, "sort": {"calls"}, "dir": {"desc"}}, repoSorts)
 	if q != (listQuery{Q: "vpc", Sort: "calls", Desc: true}) {
 		t.Errorf("q = %+v", q)
 	}
-	q = parseListQuery(url.Values{"sort": {"'; drop table"}, "dir": {"desc"}}, projectSorts)
+	q = parseListQuery(url.Values{"sort": {"'; drop table"}, "dir": {"desc"}}, repoSorts)
 	if q != (listQuery{Sort: "name"}) {
 		t.Errorf("unknown sort should fall back to name ascending, got %+v", q)
 	}
@@ -180,35 +179,113 @@ func TestSortURL(t *testing.T) {
 	}
 }
 
-func TestFilterSortProjects(t *testing.T) {
+func TestFilterSortRepos(t *testing.T) {
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	ps := []store.Project{
+	rs := []store.Repo{
 		{RepoURL: "github.com/org/b", ModuleCalls: 5, LastScanAt: &t1},
 		{RepoURL: "github.com/org/a", ModuleCalls: 5},
 		{RepoURL: "gitlab.com/org/c", ModuleCalls: 9},
 	}
-	names := func(ps []store.Project) []string {
+	names := func(rs []store.Repo) []string {
 		var out []string
-		for _, p := range ps {
-			out = append(out, p.RepoURL)
+		for _, r := range rs {
+			out = append(out, r.RepoURL)
 		}
 		return out
 	}
 
-	got := names(filterSortProjects(ps, listQuery{Sort: "calls", Desc: true}))
+	got := names(filterSortRepos(rs, listQuery{Sort: "calls", Desc: true}))
 	if want := []string{"gitlab.com/org/c", "github.com/org/b", "github.com/org/a"}; !slices.Equal(got, want) {
 		t.Errorf("by calls desc = %v, want %v", got, want)
 	}
-	got = names(filterSortProjects(ps, listQuery{Q: "GITHUB", Sort: "name"}))
+	got = names(filterSortRepos(rs, listQuery{Q: "GITHUB", Sort: "name"}))
 	if want := []string{"github.com/org/a", "github.com/org/b"}; !slices.Equal(got, want) {
 		t.Errorf("filtered = %v, want %v", got, want)
 	}
-	got = names(filterSortProjects(ps, listQuery{Sort: "scanned"}))
+	got = names(filterSortRepos(rs, listQuery{Sort: "scanned"}))
 	if got[len(got)-1] != "github.com/org/b" {
-		t.Errorf("never-scanned projects should sort before scanned ones, got %v", got)
+		t.Errorf("never-scanned repos should sort before scanned ones, got %v", got)
 	}
-	if ps[0].RepoURL != "github.com/org/b" {
+	if rs[0].RepoURL != "github.com/org/b" {
 		t.Error("sorting modified the input slice")
+	}
+}
+
+func TestSplitReposAndLinks(t *testing.T) {
+	rs := []store.Repo{
+		{ID: 1, Projects: 1, ProjectID: ptr(int64(9))},
+		{ID: 2, Projects: 3},
+		{ID: 3, Projects: 1, ProjectID: ptr(int64(8)), ModuleID: ptr(int64(4))},
+	}
+	projects, moduleSources := splitRepos(rs)
+	if len(projects) != 2 || moduleSources != 1 {
+		t.Fatalf("splitRepos = %d projects, %d module sources", len(projects), moduleSources)
+	}
+	if repoLink(projects[0]) != "/projects/9" || repoLink(projects[1]) != "/repos/2" {
+		t.Errorf("links = %s, %s; a single-project repo should go straight to its project", repoLink(projects[0]), repoLink(projects[1]))
+	}
+	if repoBranch(store.Repo{Branch: "main"}) != "main" || repoBranch(store.Repo{SeveralBranches: true}) != "several" ||
+		repoBranch(store.Repo{}) != "-" {
+		t.Error("repoBranch")
+	}
+}
+
+func call(parent, name string) store.Usage {
+	return store.Usage{Parent: parent, CallName: name}
+}
+
+func TestCallTree(t *testing.T) {
+	us := []store.Usage{
+		call("", "eks"),
+		call("", "addons"),
+		call("addons", "vpc"),
+		call("addons.vpc", "subnets"),
+		call("eks", "kms"),
+		call("gone", "orphan"),
+	}
+	var got []string
+	for _, r := range callTree(us) {
+		got = append(got, fmt.Sprintf("%d:%s", r.Depth, address(r.Usage)))
+	}
+	want := []string{"0:eks", "1:eks.kms", "0:addons", "1:addons.vpc", "2:addons.vpc.subnets", "1:gone.orphan"}
+	if !slices.Equal(got, want) {
+		t.Errorf("callTree = %v, want %v", got, want)
+	}
+	if indent(0) != "" || indent(2) != "ml-10" || indent(99) != "ml-20" {
+		t.Error("indent")
+	}
+	if via("") != "" || via("addons.vpc") != "inside addons › vpc" {
+		t.Errorf("via = %q", via("addons.vpc"))
+	}
+	if nestedCount(us) != 4 {
+		t.Errorf("nestedCount = %d", nestedCount(us))
+	}
+}
+
+func TestGroupByPath(t *testing.T) {
+	us := []store.Usage{
+		{ProjectPath: "modules/a", CallName: "x"},
+		{ProjectPath: "modules/b", CallName: "y"},
+		{ProjectPath: "modules/a", Parent: "x", CallName: "z"},
+	}
+	groups := groupByPath(us)
+	if len(groups) != 2 || groups[0].Path != "modules/a" || len(groups[0].Rows) != 2 || groups[0].Rows[1].Depth != 1 {
+		t.Errorf("groupByPath = %+v", groups)
+	}
+	if rootLabel(".") != "repository root" || rootLabel("envs/dev") != "envs/dev" {
+		t.Error("rootLabel")
+	}
+}
+
+func TestHasUnexpandedRemoteModules(t *testing.T) {
+	remoteParsed := store.Usage{ModuleID: ptr(int64(1)), ResolutionSource: "source-parse"}
+	remoteResolved := store.Usage{ModuleID: ptr(int64(1)), ResolutionSource: "modules-json"}
+	local := store.Usage{ResolutionSource: "source-parse"}
+	if !hasUnexpandedRemoteModules([]store.Usage{remoteParsed}) {
+		t.Error("a remote module parsed from source hides its own calls")
+	}
+	if hasUnexpandedRemoteModules([]store.Usage{remoteResolved, local}) {
+		t.Error("resolved remote modules and local modules are fully listed")
 	}
 }
 

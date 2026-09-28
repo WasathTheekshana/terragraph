@@ -41,12 +41,15 @@ var cssURL = func() templ.SafeURL {
 const csp = "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 type Store interface {
-	ListProjects(ctx context.Context) ([]store.Project, error)
+	ListRepos(ctx context.Context) ([]store.Repo, error)
+	GetRepo(ctx context.Context, id int64) (store.Repo, error)
+	RepoProjects(ctx context.Context, repoID int64) ([]store.Project, error)
 	GetProject(ctx context.Context, id int64) (store.Project, error)
 	ProjectUsages(ctx context.Context, projectID int64) ([]store.Usage, error)
 	ListModules(ctx context.Context) ([]store.Module, error)
 	GetModule(ctx context.Context, id int64) (store.Module, error)
 	ModuleConsumers(ctx context.Context, moduleID int64) ([]store.Usage, error)
+	ModuleDependencies(ctx context.Context, moduleID int64) ([]store.Usage, error)
 	ListRuns(ctx context.Context, limit int) ([]store.Run, error)
 	GetRun(ctx context.Context, id int64) (store.Run, error)
 	RunItems(ctx context.Context, runID int64) ([]store.RunItem, error)
@@ -70,6 +73,7 @@ func newHandler(s Store, log *slog.Logger, now func() time.Time) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", staticHandler())
 	mux.HandleFunc("GET /{$}", h.projects)
+	mux.HandleFunc("GET /repos/{id}", h.repo)
 	mux.HandleFunc("GET /projects/{id}", h.project)
 	mux.HandleFunc("GET /modules", h.modules)
 	mux.HandleFunc("GET /modules/{id}", h.module)
@@ -81,13 +85,33 @@ func newHandler(s Store, log *slog.Logger, now func() time.Time) http.Handler {
 }
 
 func (h *handler) projects(w http.ResponseWriter, r *http.Request) {
-	all, err := h.store.ListProjects(r.Context())
+	repos, err := h.store.ListRepos(r.Context())
 	if err != nil {
 		h.serverError(w, r, err)
 		return
 	}
-	q := parseListQuery(r.URL.Query(), projectSorts)
-	h.render(w, r, http.StatusOK, projectsPage(all, filterSortProjects(all, q), q))
+	all, moduleSources := splitRepos(repos)
+	q := parseListQuery(r.URL.Query(), repoSorts)
+	h.render(w, r, http.StatusOK, projectsPage(all, filterSortRepos(all, q), q, moduleSources))
+}
+
+func (h *handler) repo(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		h.notFound(w, r)
+		return
+	}
+	repo, err := h.store.GetRepo(r.Context(), id)
+	if err != nil {
+		h.lookupError(w, r, err)
+		return
+	}
+	projects, err := h.store.RepoProjects(r.Context(), id)
+	if err != nil {
+		h.lookupError(w, r, err)
+		return
+	}
+	h.render(w, r, http.StatusOK, repoPage(repo, projects))
 }
 
 func (h *handler) project(w http.ResponseWriter, r *http.Request) {
@@ -101,12 +125,17 @@ func (h *handler) project(w http.ResponseWriter, r *http.Request) {
 		h.lookupError(w, r, err)
 		return
 	}
+	repo, err := h.store.GetRepo(r.Context(), p.RepoID)
+	if err != nil {
+		h.lookupError(w, r, err)
+		return
+	}
 	usages, err := h.store.ProjectUsages(r.Context(), id)
 	if err != nil {
 		h.lookupError(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, projectPage(p, usages))
+	h.render(w, r, http.StatusOK, projectPage(p, repo, usages))
 }
 
 func (h *handler) modules(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +164,14 @@ func (h *handler) module(w http.ResponseWriter, r *http.Request) {
 		h.lookupError(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, modulePage(m, consumers))
+	var deps []store.Usage
+	if m.RepoID != nil {
+		if deps, err = h.store.ModuleDependencies(r.Context(), id); err != nil {
+			h.lookupError(w, r, err)
+			return
+		}
+	}
+	h.render(w, r, http.StatusOK, modulePage(m, consumers, deps))
 }
 
 func (h *handler) runs(w http.ResponseWriter, r *http.Request) {

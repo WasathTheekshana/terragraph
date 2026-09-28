@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,7 +69,11 @@ type Fact struct {
 	Type string `json:"type"`
 
 	// module_call fields
-	CallName         string `json:"call_name,omitempty"`
+	CallName string `json:"call_name,omitempty"`
+	// Parent is the dotted path of module calls this call is nested in, e.g.
+	// "addons" for a call inside the module called "addons". Empty for calls
+	// in the root itself.
+	Parent           string `json:"parent,omitempty"`
 	Source           string `json:"source,omitempty"`
 	RefDeclared      string `json:"ref_declared,omitempty"`
 	RefResolved      string `json:"ref_resolved,omitempty"`
@@ -116,12 +121,19 @@ func (r Report) Validate() error {
 				add("facts[%d].type must be %q", i, FactTypeModuleCall)
 				continue
 			}
+			address := f.CallName
+			if f.Parent != "" {
+				address = f.Parent + "." + f.CallName
+				if slices.Contains(strings.Split(f.Parent, "."), "") {
+					add("facts[%d].parent %q must be dot-separated call names", i, f.Parent)
+				}
+			}
 			if f.CallName == "" {
 				add("facts[%d].call_name is required", i)
-			} else if seen[f.CallName] {
-				add("facts[%d].call_name %q is duplicated", i, f.CallName)
+			} else if seen[address] {
+				add("facts[%d] module call %q is duplicated", i, address)
 			}
-			seen[f.CallName] = true
+			seen[address] = true
 			if f.Source == "" {
 				add("facts[%d].source is required", i)
 			}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or how-to
+    url: https://github.com/WasathTheekshana/terragraph/discussions
+    about: Ask in Discussions so the answer helps the next person too.
+  - name: Report a security vulnerability
+    url: https://github.com/WasathTheekshana/terragraph/security/advisories/new
+    about: Report it privately. Please don't open a public issue.

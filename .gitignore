@@ -1,2 +1,19 @@
+# Local settings
 .env
+
+# Tools downloaded by make
 .bin/
+
+# Build output
+*.test
+*.out
+
+# Scan reports written by --out
+*-report.json
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

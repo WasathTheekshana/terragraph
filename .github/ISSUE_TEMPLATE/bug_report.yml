@@ -1,0 +1,60 @@
+name: Bug report
+description: Something doesn't work the way the docs say it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. If it's a security problem, please don't file it here. Use the
+        [private reporting form](https://github.com/WasathTheekshana/terragraph/security/advisories/new).
+        For questions, use [Discussions](https://github.com/WasathTheekshana/terragraph/discussions).
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Scanner
+        - Server (API)
+        - Server (web UI)
+        - Sign-in or API tokens
+        - Local stack (make, Docker Compose)
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact command or clicks. A minimal Terraform layout that triggers it is ideal.
+      placeholder: |
+        1. terragraph scan --path ...
+        2. Open /projects/1
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The commit SHA or release you're running. `terragraph --version` for the scanner.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go version if you built it, and how the server is deployed.
+      placeholder: Windows 11, Docker Desktop, make up
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output and logs
+      description: Redact tokens, internal URLs, and repo names you don't want public.
+      render: text

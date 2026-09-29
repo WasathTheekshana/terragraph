@@ -1,0 +1,5 @@
+# Reviewers requested automatically on pull requests. Later patterns win.
+*                @WasathTheekshana
+/.github/        @WasathTheekshana
+/SECURITY.md     @WasathTheekshana
+/server/internal/auth/   @WasathTheekshana

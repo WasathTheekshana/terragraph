@@ -72,6 +72,7 @@ step notices.
 | `--repo-url`, `--commit` | override what git reports; only when `--path` holds one repo |
 | `--mode module-repo --repo-url URL` | only list one module repo's versions, e.g. in its own pipeline |
 | `--dry-run`, `--out FILE` | print or save the reports as a JSON array instead of submitting |
+| `--version` | print the scanner's version; include it in bug reports |
 | `--api-url`, `--token` | server and token; default to `TERRAGRAPH_API_URL` and `TERRAGRAPH_TOKEN` |
 | `--github-oidc` | in GitHub Actions, sign in with the workflow's ID token instead of a token (or `TERRAGRAPH_GITHUB_OIDC=true`); needs `permissions: id-token: write` |
 | `--oidc-audience` | audience for `--github-oidc` (default `terragraph`); must match the server's |

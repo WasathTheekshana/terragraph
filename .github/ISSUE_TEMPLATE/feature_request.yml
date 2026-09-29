@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest a change or something new
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the problem, not the solution. Check the
+        [design document](https://github.com/WasathTheekshana/terragraph/blob/main/docs/design.md)
+        first: some things are left out on purpose, and the open questions list what's undecided.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like to see
+      description: How you imagine it working. It's fine to leave this open if you only know the problem.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried
+      description: Workarounds, or other tools that handle this well.
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you send a pull request for it?
+      options:
+        - "Yes"
+        - "Maybe, with some guidance"
+        - "No"

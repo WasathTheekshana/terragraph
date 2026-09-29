@@ -20,6 +20,7 @@ func main() {
 		// main prints the error once; usage is only useful for flag mistakes.
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		Version:       buildVersion(),
 	}
 	root.AddCommand(newScanCmd())
 

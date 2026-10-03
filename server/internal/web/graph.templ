@@ -1,0 +1,94 @@
+package web
+
+const graphSelect = "rounded-md border border-slate-300 bg-white px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900"
+
+templ graphPage(v graphView) {
+	@page("Graph", "graph", 0) {
+		<link rel="stylesheet" href={ graphCSSURL }/>
+		<div class="flex flex-wrap items-end justify-between gap-4">
+			@pageHeader("Dependency graph", graphSubtitle(v))
+			<form method="get" action="/graph" class="flex flex-wrap items-end gap-3 text-sm">
+				if v.FocusKind != "" {
+					<input type="hidden" name={ v.FocusKind } value={ v.FocusID }/>
+					<label class="flex flex-col gap-1">
+						<span class="text-xs font-medium text-slate-500 dark:text-slate-400">Direction</span>
+						<select name="direction" class={ graphSelect }>
+							<option value="" selected?={ v.Direction == "" }>Default</option>
+							<option value="down" selected?={ v.Direction == "down" }>Depends on</option>
+							<option value="up" selected?={ v.Direction == "up" }>Used by</option>
+							<option value="both" selected?={ v.Direction == "both" }>Both</option>
+						</select>
+					</label>
+					<label class="flex flex-col gap-1">
+						<span class="text-xs font-medium text-slate-500 dark:text-slate-400">Depth</span>
+						<select name="depth" class={ graphSelect }>
+							<option value="" selected?={ v.Depth == "" }>All</option>
+							<option value="1" selected?={ v.Depth == "1" }>1</option>
+							<option value="2" selected?={ v.Depth == "2" }>2</option>
+							<option value="3" selected?={ v.Depth == "3" }>3</option>
+						</select>
+					</label>
+				}
+				<label class="flex flex-col gap-1">
+					<span class="text-xs font-medium text-slate-500 dark:text-slate-400">Show</span>
+					<select name="level" class={ graphSelect }>
+						<option value="" selected?={ v.Level == "" }>Projects</option>
+						<option value="repo" selected?={ v.Level == "repo" }>Repositories</option>
+					</select>
+				</label>
+				<label class="flex items-center gap-2 pb-1.5">
+					<input type="checkbox" name="locals" value="true" checked?={ v.Locals } class="size-4 accent-amber-500"/>
+					<span>Local modules</span>
+				</label>
+				<button type="submit" class="rounded-md bg-slate-900 px-3 py-1.5 font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Apply</button>
+				if v.FocusKind != "" {
+					<a href="/graph" class="pb-1.5 text-slate-500 hover:text-slate-900 dark:hover:text-white">Show everything</a>
+				}
+			</form>
+		</div>
+		<p id="graph-notice" hidden class="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-300"></p>
+		<p id="graph-empty" hidden class="mt-8 rounded-lg border border-dashed border-slate-300 p-10 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+			Nothing to draw yet. Scan some Terraform projects and their module calls will appear here.
+		</p>
+		<div
+			id="graph"
+			data-src={ v.DataURL }
+			data-focus={ v.focusNode() }
+			class="relative mt-4 flex h-[70vh] min-h-96 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+		>
+			<svg id="graph-canvas" class="h-full min-w-0 flex-1" role="img" aria-label="Module dependency graph"></svg>
+			<noscript>
+				<p class="absolute inset-0 grid place-items-center p-6 text-center text-sm text-slate-500">The graph needs JavaScript. The projects and modules pages list the same dependencies as tables.</p>
+			</noscript>
+			<div class="absolute top-3 left-3">
+				<label for="graph-search" class="sr-only">Find a node</label>
+				<input
+					id="graph-search"
+					type="search"
+					placeholder="Find a project or module"
+					class="w-56 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-amber-500 dark:border-slate-700 dark:bg-slate-900"
+				/>
+			</div>
+			<div class="absolute bottom-3 left-3 flex overflow-hidden rounded-md border border-slate-300 bg-white text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900">
+				<button id="graph-zoom-in" type="button" aria-label="Zoom in" class="px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800">+</button>
+				<button id="graph-zoom-out" type="button" aria-label="Zoom out" class="border-l border-slate-300 px-3 py-1.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">&minus;</button>
+				<button id="graph-fit" type="button" class="border-l border-slate-300 px-3 py-1.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Fit</button>
+			</div>
+			<aside id="graph-panel" hidden class="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"></aside>
+		</div>
+		@graphLegend()
+		<script src={ string(graphJSURL) } defer></script>
+	}
+}
+
+templ graphLegend() {
+	<ul class="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+		<li class="flex items-center gap-1.5"><span class="inline-block h-0.5 w-5 bg-green-600"></span>up to date</li>
+		<li class="flex items-center gap-1.5"><span class="inline-block h-0.5 w-5 bg-amber-600"></span>outdated</li>
+		<li class="flex items-center gap-1.5"><span class="inline-block h-0.5 w-5 bg-rose-600"></span>major version behind</li>
+		<li class="flex items-center gap-1.5"><span class="inline-block h-0.5 w-5 bg-slate-400"></span>version unknown</li>
+		<li class="flex items-center gap-1.5"><span class="inline-block w-5 border-t-2 border-dashed border-slate-400"></span>called inside a module</li>
+		<li class="flex items-center gap-1.5"><span class="inline-block w-5 border-t-2 border-dotted border-slate-400"></span>declared by the module's own repo</li>
+		<li class="flex items-center gap-1.5"><span class="inline-block size-3 rounded-sm border-2 border-rose-600"></span>in a dependency cycle</li>
+	</ul>
+}

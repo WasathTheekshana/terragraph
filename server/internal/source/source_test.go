@@ -52,3 +52,48 @@ func TestRepoKeyMatchesAcrossForms(t *testing.T) {
 		}
 	}
 }
+
+func TestSubdir(t *testing.T) {
+	tests := []struct {
+		src  string
+		want string
+	}{
+		{"git::https://github.com/org/mods.git//modules/vpc?ref=v1.0.0", "modules/vpc"},
+		{"git::ssh://git@github.com/org/mods.git//vpc?ref=v1.4.2", "vpc"},
+		{"git::git@github.com:org/mods.git//sub?ref=v1.0.0", "sub"},
+		{"git@github.com:org/mods.git//a/b", "a/b"},
+		{"github.com/org/mods//vpc?ref=v1", "vpc"},
+		{"terraform-aws-modules/eks/aws//modules/karpenter", "modules/karpenter"},
+		{"git::https://github.com/org/mods.git//modules/vpc/", "modules/vpc"},
+		{"git::https://github.com/org/mods.git//./modules/vpc", "modules/vpc"},
+
+		{"git::https://github.com/org/mods.git?ref=v1.0.0", ""},
+		{"git::https://github.com/org/mods.git", ""},
+		{"https://github.com/org/mods", ""},
+		{"git@github.com:org/mods.git", ""},
+		{"terraform-aws-modules/s3-bucket/aws", ""},
+		{"git::https://github.com/org/mods.git//", ""},
+		{"git::https://github.com/org/mods.git//.", ""},
+		{"git::https://github.com/org/mods.git//../escape", ""},
+		{"./modules/helpers", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.src, func(t *testing.T) {
+			if got := Subdir(tt.src); got != tt.want {
+				t.Errorf("Subdir(%q) = %q, want %q", tt.src, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubdirIsIndependentOfTheKey(t *testing.T) {
+	// Two modules in one repo share a key and differ only by subdirectory.
+	a := "git::https://github.com/org/mods.git//vpc?ref=v1.0.0"
+	b := "git::https://github.com/org/mods.git//eks?ref=v1.0.0"
+	_, keyA := Parse(a)
+	_, keyB := Parse(b)
+	if keyA != keyB || Subdir(a) == Subdir(b) {
+		t.Errorf("expected one key and two subdirectories, got %q %q / %q %q", keyA, keyB, Subdir(a), Subdir(b))
+	}
+}

@@ -30,10 +30,25 @@ scan report format may still change.
   - Postgres store with embedded migrations that are safe with several replicas.
   - Current-state rules: only tracked branches replace a project's state, and an older scan never
     replaces a newer one.
-  - Web UI with no JavaScript: repos, projects with their module call tree, modules with their
+  - Web UI, server-rendered: repos, projects with their module call tree, modules with their
     consumers, and scan runs with live progress.
   - Modules are matched by repo however the source URL is written (`https`, `git@`, `ssh`, with or
     without `.git`, `//subdir`, or `?ref=`).
+- **Dependency graph**
+  - `GET /api/v1/graph` returns every project, repo, and module as nodes, with the calls between
+    them as edges that carry the versions in use, a status (current, outdated, major behind,
+    unknown), and where the dependency was seen (a project's own call, a call nested inside a
+    module, or a dependency declared in the module's own repo).
+  - A repo with many projects is one group, and a module repo with many modules is split by
+    `//subdir`, so each module in a monorepo is its own node.
+  - Local modules are folded into their caller, calls nested in shared modules are traced
+    through, dependency cycles are flagged, and version drift is marked per module.
+  - An interactive graph page at `/graph`: callers on the left and what they call on the right,
+    with pan, zoom, search, and a detail panel per node. Projects, repos, and modules link to their
+    own focused graph. The script is served by the server itself, with no CDN or library.
+  - Focus on one project, repo, or module, up or down, to a given depth. `level=repo` collapses
+    projects into their repos, and `max_nodes` falls back to repos and then trims the least
+    connected nodes.
 - **Authentication**
   - Sign-in through any OpenID Connect provider with the authorization code flow and PKCE, with
     sessions stored in Postgres.

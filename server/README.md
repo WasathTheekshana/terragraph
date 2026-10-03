@@ -45,7 +45,7 @@ Then open `http://localhost:8080` for the web UI.
 
 ## Web UI
 
-Server-rendered pages, no JavaScript:
+Server-rendered pages. Only the graph page uses JavaScript, a small script served by the server itself:
 
 | page | |
 |---|---|
@@ -54,6 +54,7 @@ Server-rendered pages, no JavaScript:
 | `/projects/{id}` | a project's module calls as a tree: calls made inside other modules are indented under them and marked nested |
 | `/modules` | modules with their latest release and how many projects use them |
 | `/modules/{id}` | which versions of a module are in use, every project using it, and, if the module's own repo was scanned, the modules it uses |
+| `/graph` | the dependency graph: every project and the modules it calls, left to right, with pan, zoom, search, and a detail panel. `?project=`, `?repo=`, or `?module=` focus on one, with `direction` and `depth`; the project, repo, and module pages link to theirs |
 | `/runs` | each scanner run, with its status and progress |
 | `/runs/{id}` | one run's items as they're scanned, failures first; refreshes every 2 seconds while the run is active |
 | `/settings/tokens` | admins only: create and revoke API tokens |
@@ -185,6 +186,7 @@ All responses are JSON. Errors look like `{"error": "...", "details": ["..."]}`.
 | `GET` | `/api/v1/modules/{id}/consumers` | every project calling a module (its blast radius) |
 | `GET` | `/api/v1/modules/{id}/dependencies` | the module calls in the module's own repo, if it was scanned |
 | `GET` | `/api/v1/repos`, `/api/v1/repos/{id}` | repos with their projects' combined counts; one repo with its projects |
+| `GET` | `/api/v1/graph` | the dependency graph; query: `project`, `repo`, or `module` to focus, `direction` (`down`, `up`, `both`), `depth`, `level` (`project`, `repo`), `locals`, `max_nodes` |
 | `POST` | `/api/v1/runs` | start a run: `{"label": "...", "items": [{"kind": "project", "repo_url": "...", "path": "envs/prod"}, {"kind": "module_repo", "repo_url": "..."}]}` |
 | `POST` | `/api/v1/runs/{id}/items/{item}/scan` | submit an item's scan report and mark it done |
 | `POST` | `/api/v1/runs/{id}/items/{item}/fail` | mark an item failed: `{"error": "..."}` |

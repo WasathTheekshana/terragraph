@@ -4,6 +4,7 @@ package source
 
 import (
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -87,6 +88,31 @@ func RepoKey(raw string) string {
 		return strings.ToLower(host)
 	}
 	return strings.ToLower(host + "/" + path)
+}
+
+// Subdir returns the "//subdir" part of a module source, cleaned of slashes, or
+// "" when the source names the whole repo or registry module. A repo can hold
+// many modules, and this is what tells them apart: Parse gives them all the
+// same key.
+func Subdir(src string) string {
+	s := stripQuery(strings.TrimSpace(src))
+	start := 0
+	if i := strings.Index(s, "://"); i >= 0 {
+		start = i + 3
+	}
+	i := strings.Index(s[start:], "//")
+	if i < 0 {
+		return ""
+	}
+	dir := strings.Trim(s[start+i+2:], "/")
+	if dir == "" {
+		return ""
+	}
+	dir = path.Clean(dir)
+	if dir == "." || dir == ".." || strings.HasPrefix(dir, "../") {
+		return ""
+	}
+	return dir
 }
 
 func stripQuery(s string) string {

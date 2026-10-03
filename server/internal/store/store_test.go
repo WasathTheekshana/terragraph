@@ -702,3 +702,40 @@ func TestIngestStoresRawReport(t *testing.T) {
 		t.Errorf("stored report lost fields: extra_field = %q", extra)
 	}
 }
+
+func TestListUsagesReturnsEveryProjectsCalls(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	mustIngest(t, s, projectScan("https://github.com/org/app.git", "main", t0,
+		report.Fact{CallName: "addons", Source: "./modules/addons"},
+		report.Fact{CallName: "vpc", Parent: "addons", Source: "git::https://github.com/org/vpc.git?ref=v1.0.0", RefDeclared: "v1.0.0"},
+	), true)
+	mustIngest(t, s, projectScan("https://github.com/org/other.git", "main", t0,
+		report.Fact{CallName: "vpc", Source: "git::https://github.com/org/vpc.git//modules/base?ref=v2.0.0", RefDeclared: "v2.0.0"},
+	), true)
+
+	usages, err := s.ListUsages(ctx)
+	if err != nil || len(usages) != 3 {
+		t.Fatalf("usages = %+v, %v", usages, err)
+	}
+	byProject := map[string]int{}
+	var local, nested, sub int
+	for _, u := range usages {
+		byProject[u.ProjectRepoURL]++
+		if u.ModuleID == nil {
+			local++
+		}
+		if u.Parent != "" {
+			nested++
+		}
+		if u.Source == "git::https://github.com/org/vpc.git//modules/base?ref=v2.0.0" {
+			sub++
+		}
+	}
+	if byProject["https://github.com/org/app.git"] != 2 || byProject["https://github.com/org/other.git"] != 1 {
+		t.Errorf("calls per project = %v", byProject)
+	}
+	if local != 1 || nested != 1 || sub != 1 {
+		t.Errorf("local = %d, nested = %d, subdirectory source kept = %d; want 1 each", local, nested, sub)
+	}
+}

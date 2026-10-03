@@ -236,6 +236,12 @@ func (s *Store) ProjectUsages(ctx context.Context, projectID int64) ([]Usage, er
 	return s.usages(ctx, `u.project_id = $1 ORDER BY u.parent, u.file, u.line, u.call_name`, projectID)
 }
 
+// ListUsages returns every module call in every project's current state. It
+// is what the dependency graph is built from.
+func (s *Store) ListUsages(ctx context.Context) ([]Usage, error) {
+	return s.usages(ctx, `TRUE ORDER BY p.repo_url, p.path, u.parent, u.call_name`)
+}
+
 // ModuleConsumers returns every module call, across all projects, that uses
 // the module: the blast radius of changing it.
 func (s *Store) ModuleConsumers(ctx context.Context, moduleID int64) ([]Usage, error) {

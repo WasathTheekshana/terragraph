@@ -79,6 +79,10 @@ var (
 	open   = auth.Principal{Kind: auth.KindOpen, Admin: true, CanRead: true, CanIngest: true, CSRFToken: "csrf-open"}
 )
 
+func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.projects, f.err }
+
+func (f *fakeStore) ListUsages(context.Context) ([]store.Usage, error) { return f.usages, f.err }
+
 func (f *fakeStore) ListRepos(context.Context) ([]store.Repo, error) { return f.repos, f.err }
 
 func (f *fakeStore) GetRepo(_ context.Context, id int64) (store.Repo, error) {

@@ -13,12 +13,16 @@ import (
 	"testing"
 
 	"github.com/WasathTheekshana/terragraph/server/internal/auth"
+	"github.com/WasathTheekshana/terragraph/server/internal/graph"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
 )
 
 const token = "test-token"
 
 type fakeStore struct {
+	// data, when set, is what the list methods return for the graph.
+	data *graph.Input
+
 	ingested  []store.Scan
 	ingestErr error
 	pingErr   error
@@ -39,9 +43,24 @@ func (f *fakeStore) Ingest(_ context.Context, in store.Scan) (store.IngestResult
 	return store.IngestResult{ScanID: int64(len(f.ingested)), Applied: in.Tracked}, nil
 }
 
-func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return nil, nil }
+func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) {
+	if f.data != nil {
+		return f.data.Projects, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) ListUsages(context.Context) ([]store.Usage, error) {
+	if f.data != nil {
+		return f.data.Usages, nil
+	}
+	return nil, nil
+}
 
 func (f *fakeStore) ListModules(context.Context) ([]store.Module, error) {
+	if f.data != nil {
+		return f.data.Modules, nil
+	}
 	return []store.Module{{ID: 1, Key: "github.com/org/vpc", Kind: "git"}}, nil
 }
 
@@ -78,6 +97,9 @@ func (f *fakeStore) ModuleDependencies(ctx context.Context, id int64) ([]store.U
 }
 
 func (f *fakeStore) ListRepos(context.Context) ([]store.Repo, error) {
+	if f.data != nil {
+		return f.data.Repos, nil
+	}
 	return []store.Repo{{ID: 7, RepoURL: "git@github.com:org/p.git", Projects: 2}}, nil
 }
 

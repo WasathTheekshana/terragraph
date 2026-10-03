@@ -21,33 +21,40 @@ import (
 	"github.com/a-h/templ"
 
 	"github.com/WasathTheekshana/terragraph/server/internal/auth"
+	"github.com/WasathTheekshana/terragraph/server/internal/graph"
 	"github.com/WasathTheekshana/terragraph/server/internal/store"
 )
 
 //go:embed static
 var staticFiles embed.FS
 
-// cssURL carries a hash of the stylesheet so it can be cached forever and
+// assetURL carries a hash of a static file so it can be cached forever and
 // still change on deploy.
-var cssURL = func() templ.SafeURL {
-	css, err := staticFiles.ReadFile("static/app.css")
+func assetURL(name string) templ.SafeURL {
+	data, err := staticFiles.ReadFile("static/" + name)
 	if err != nil {
-		panic("web: static/app.css is missing; run make generate")
+		panic("web: static/" + name + " is missing; run make generate")
 	}
-	sum := sha256.Sum256(css)
-	return templ.SafeURL("/static/app.css?v=" + hex.EncodeToString(sum[:6]))
-}()
+	sum := sha256.Sum256(data)
+	return templ.SafeURL("/static/" + name + "?v=" + hex.EncodeToString(sum[:6]))
+}
 
-// Pages load only the bundled stylesheet and images; no scripts at all.
-const csp = "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+var (
+	cssURL      = assetURL("app.css")
+	graphCSSURL = assetURL("graph.css")
+	graphJSURL  = assetURL("graph.js")
+)
+
+// Pages load only the bundled stylesheet, images, and the graph's script, which fetches its data
+// from this server.
+const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 type Store interface {
-	ListRepos(ctx context.Context) ([]store.Repo, error)
+	graph.Source
 	GetRepo(ctx context.Context, id int64) (store.Repo, error)
 	RepoProjects(ctx context.Context, repoID int64) ([]store.Project, error)
 	GetProject(ctx context.Context, id int64) (store.Project, error)
 	ProjectUsages(ctx context.Context, projectID int64) ([]store.Usage, error)
-	ListModules(ctx context.Context) ([]store.Module, error)
 	GetModule(ctx context.Context, id int64) (store.Module, error)
 	ModuleConsumers(ctx context.Context, moduleID int64) ([]store.Usage, error)
 	ModuleDependencies(ctx context.Context, moduleID int64) ([]store.Usage, error)
@@ -100,6 +107,8 @@ func newHandler(s Store, a Authenticator, log *slog.Logger, now func() time.Time
 	mux.Handle("GET /projects/{id}", page(h.project))
 	mux.Handle("GET /modules", page(h.modules))
 	mux.Handle("GET /modules/{id}", page(h.module))
+	mux.Handle("GET /graph", page(h.graphPage))
+	mux.Handle("GET /graph/data", page(h.graphData))
 	mux.Handle("GET /runs", page(h.runs))
 	mux.Handle("GET /runs/{id}", page(h.run))
 	mux.Handle("GET /settings/tokens", page(h.tokens))

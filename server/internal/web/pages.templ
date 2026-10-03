@@ -78,6 +78,7 @@ templ repoPage(r store.Repo, projects []store.Project) {
 		@backLink("/", "All projects")
 		<div class="mt-4">
 			@namedHeader(repoName(r.RepoURL), r.RepoURL, fmt.Sprintf("%d Terraform projects · branch %s · last scanned %s", r.Projects, repoBranch(r), formatTime(r.LastScanAt)))
+			@graphLink(fmt.Sprintf("/graph?repo=%d", r.ID))
 		</div>
 		@statGrid() {
 			@stat("Terraform projects", r.Projects, toneMuted)
@@ -138,6 +139,7 @@ templ projectPage(p store.Project, repo store.Repo, usages []store.Usage) {
 		}
 		<div class="mt-4">
 			@namedHeader(repoName(p.RepoURL), p.RepoURL, fmt.Sprintf("%sBranch %s · commit %s · scanned %s", pathPrefix(p.Path), p.LastBranch, shortSHA(p.LastCommitSHA), formatTime(p.LastScanAt)))
+			@graphLink(fmt.Sprintf("/graph?project=%d", p.ID))
 		</div>
 		{{ s := summarizeUsages(usages) }}
 		@statGrid() {
@@ -282,6 +284,7 @@ templ modulePage(m store.Module, consumers []store.Usage, deps []store.Usage) {
 		@backLink("/modules", "All modules")
 		<div class="mt-4">
 			@namedHeader(moduleName(m.Key, m.Kind), m.Key, fmt.Sprintf("%s module · latest %s · versions scanned %s", m.Kind, orDash(m.LatestVersion), formatTime(m.VersionsScannedAt)))
+			@graphLink(fmt.Sprintf("/graph?module=%d", m.ID))
 		</div>
 		{{ s := summarizeUsages(consumers) }}
 		@statGrid() {

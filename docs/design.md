@@ -48,8 +48,8 @@ inventory) can plug into the same platform without a redesign.
                   browsers
 ```
 
-The web UI is rendered by the server itself (Go, [templ](https://templ.guide), Tailwind, no
-JavaScript), reading the same store as the API, so the whole platform is one binary and one
+The web UI is rendered by the server itself (Go, [templ](https://templ.guide), Tailwind, and
+one small script for the graph page), reading the same store as the API, so the whole platform is one binary and one
 container.
 
 The scanner takes any path: one repo, a folder inside one, or a folder of many repos at any

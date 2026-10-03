@@ -3,3 +3,4 @@
 
 @source "../*.templ";
 @source "../view.go";
+@source "../static/graph.js";

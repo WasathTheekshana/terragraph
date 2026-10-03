@@ -25,7 +25,7 @@ templ projectsPage(all []store.Repo, shown []store.Repo, q listQuery, moduleSour
 			if moduleSources > 0 {
 				<p class="mt-3 text-sm text-slate-500 dark:text-slate-400">
 					{ plural(moduleSources, "scanned repository is a shared module", "scanned repositories are shared modules") }, so
-					{ " " }<a href="/modules" class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">listed under Modules</a>.
+					{ " " }<a href="/modules" class="text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">listed under Modules</a>.
 				</p>
 			}
 			if len(shown) == 0 {
@@ -48,7 +48,7 @@ templ projectsPage(all []store.Repo, shown []store.Repo, q listQuery, moduleSour
 						for _, r := range shown {
 							<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
 								<td class="px-4 py-3">
-									<a href={ repoLink(r) } title={ r.RepoURL } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ repoName(r.RepoURL) }</a>
+									<a href={ repoLink(r) } title={ r.RepoURL } class="font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">{ repoName(r.RepoURL) }</a>
 									if r.Projects > 1 {
 										<div class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{ fmt.Sprintf("%d Terraform projects", r.Projects) }</div>
 									} else if p := projectPath(r.ProjectPath); p != "" {
@@ -103,7 +103,7 @@ templ repoPage(r store.Repo, projects []store.Project) {
 				for _, p := range projects {
 					<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
 						<td class="px-4 py-3">
-							<a href={ projectURL(p.ID) } class="font-mono text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ rootLabel(p.Path) }</a>
+							<a href={ projectURL(p.ID) } class="font-mono text-sm font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">{ rootLabel(p.Path) }</a>
 						</td>
 						<td class="px-4 py-3 text-right tabular-nums">{ fmt.Sprint(p.ModuleCalls) }</td>
 						<td class="px-4 py-3 text-right tabular-nums">
@@ -121,7 +121,7 @@ templ repoPage(r store.Repo, projects []store.Project) {
 }
 
 templ moduleSourceNote(moduleID int64) {
-	<p class="mt-6 rounded-md border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+	<p class="mt-6 rounded-md border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
 		Projects use this repository as a shared module.
 		{ " " }<a href={ moduleURL(moduleID) } class="font-medium underline">See the module and who uses it</a>.
 	</p>
@@ -194,13 +194,13 @@ templ callsTable(rows []callRow) {
 							}
 							<span class={ templ.KV("font-medium", r.Depth == 0) } title={ address(r.Usage) }>{ r.CallName }</span>
 							if r.Depth > 0 {
-								<span class="rounded bg-indigo-50 px-1.5 py-0.5 font-sans text-[10px] font-medium tracking-wide text-indigo-700 uppercase dark:bg-indigo-500/10 dark:text-indigo-300">nested</span>
+								<span class="rounded bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] font-medium tracking-wide text-slate-600 uppercase dark:bg-slate-800 dark:text-slate-300">nested</span>
 							}
 						</div>
 					</td>
 					<td class="px-4 py-3">
 						if r.ModuleID != nil {
-							<a href={ moduleURL(*r.ModuleID) } title={ orDash(r.ModuleKey) } class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ usageModuleName(r.Usage) }</a>
+							<a href={ moduleURL(*r.ModuleID) } title={ orDash(r.ModuleKey) } class="text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">{ usageModuleName(r.Usage) }</a>
 						} else {
 							<span class="text-slate-500 dark:text-slate-400">{ r.Source }</span>
 						}
@@ -256,7 +256,7 @@ templ modulesPage(all []store.Module, shown []store.Module, q listQuery) {
 						for _, m := range shown {
 							<tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
 								<td class="px-4 py-3">
-									<a href={ moduleURL(m.ID) } title={ m.Key } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ moduleName(m.Key, m.Kind) }</a>
+									<a href={ moduleURL(m.ID) } title={ m.Key } class="font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">{ moduleName(m.Key, m.Kind) }</a>
 									if m.RepoID != nil {
 										<div class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">source scanned</div>
 									}
@@ -299,7 +299,7 @@ templ modulePage(m store.Module, consumers []store.Usage, deps []store.Usage) {
 			<h2 class="mt-10 text-lg font-semibold">What this module uses</h2>
 			<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
 				Modules called by this module's own code, from a scan of its
-				{ " " }<a href={ repoURL(*m.RepoID) } class="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">repository</a>.
+				{ " " }<a href={ repoURL(*m.RepoID) } class="text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">repository</a>.
 			</p>
 			if len(deps) == 0 {
 				@emptyState("Uses no other modules") {
@@ -384,7 +384,7 @@ templ modulePage(m store.Module, consumers []store.Usage, deps []store.Usage) {
 templ errorPage(code int, title string, message string) {
 	@layout(title, "") {
 		<div class="py-16 text-center">
-			<p class="text-sm font-semibold text-indigo-600 dark:text-indigo-400">{ fmt.Sprint(code) }</p>
+			<p class="text-sm font-semibold text-amber-700 dark:text-amber-400">{ fmt.Sprint(code) }</p>
 			<h1 class="mt-2 text-2xl font-semibold tracking-tight">{ title }</h1>
 			<p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{ message }</p>
 			<p class="mt-6">

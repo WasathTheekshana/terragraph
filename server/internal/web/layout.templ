@@ -70,7 +70,7 @@ templ navLink(href templ.SafeURL, label string, current bool) {
 	<a
 		href={ href }
 		class={ "flex items-center border-b-2 transition-colors",
-			templ.KV("border-indigo-500 text-slate-900 dark:text-white", current),
+			templ.KV("border-amber-500 text-slate-900 dark:text-white", current),
 			templ.KV("border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white", !current) }
 		if current {
 			aria-current="page"
@@ -102,7 +102,7 @@ templ namedHeader(name string, full string, subtitle string) {
 }
 
 templ backLink(href templ.SafeURL, label string) {
-	<a href={ href } class="text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">← { label }</a>
+	<a href={ href } class="text-sm font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">← { label }</a>
 }
 
 templ statGrid() {
@@ -151,7 +151,7 @@ templ searchForm(action string, q listQuery, placeholder string) {
 			name="q"
 			value={ q.Q }
 			placeholder={ placeholder }
-			class="w-full max-w-sm rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-indigo-500 dark:border-slate-700 dark:bg-slate-900"
+			class="w-full max-w-sm rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-amber-500 dark:border-slate-700 dark:bg-slate-900"
 		/>
 		<button type="submit" class="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">
 			Search
@@ -208,14 +208,14 @@ templ progressBar(value int, total int, label string) {
 		value={ fmt.Sprint(value) }
 		max={ fmt.Sprint(max(total, 1)) }
 		aria-label={ label }
-		class="h-2 w-full appearance-none overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800 [&::-moz-progress-bar]:bg-indigo-500 [&::-webkit-progress-bar]:bg-slate-200 dark:[&::-webkit-progress-bar]:bg-slate-800 [&::-webkit-progress-value]:bg-indigo-500"
+		class="h-2 w-full appearance-none overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800 [&::-moz-progress-bar]:bg-amber-500 [&::-webkit-progress-bar]:bg-slate-200 dark:[&::-webkit-progress-bar]:bg-slate-800 [&::-webkit-progress-value]:bg-amber-500"
 	></progress>
 }
 
 // projectName shows a project's repo, with its path inside the repo when it
 // isn't the root.
 templ projectName(repoURL string, path string, href templ.SafeURL) {
-	<a href={ href } title={ repoURL } class="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400">{ repoName(repoURL) }</a>
+	<a href={ href } title={ repoURL } class="font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300">{ repoName(repoURL) }</a>
 	if p := projectPath(path); p != "" {
 		<div class="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">{ p }</div>
 	}

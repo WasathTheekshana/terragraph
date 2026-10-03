@@ -47,11 +47,11 @@ templ tokensPage(tokens []store.APIToken, form tokenForm, created string, csrf s
 				<fieldset>
 					<legend class="text-sm font-medium">May</legend>
 					<label class="mt-2 flex items-center gap-2 text-sm">
-						<input type="checkbox" name="ingest" checked?={ form.Ingest } class="size-4 accent-indigo-600"/>
+						<input type="checkbox" name="ingest" checked?={ form.Ingest } class="size-4 accent-amber-600"/>
 						Submit scans
 					</label>
 					<label class="mt-2 flex items-center gap-2 text-sm">
-						<input type="checkbox" name="read" checked?={ form.Read } class="size-4 accent-indigo-600"/>
+						<input type="checkbox" name="read" checked?={ form.Read } class="size-4 accent-amber-600"/>
 						Read results through the API
 					</label>
 				</fieldset>
@@ -126,7 +126,7 @@ templ tokensPage(tokens []store.APIToken, form tokenForm, created string, csrf s
 	}
 }
 
-const inputClass = "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-indigo-500 dark:border-slate-700 dark:bg-slate-950"
+const inputClass = "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-amber-500 dark:border-slate-700 dark:bg-slate-950"
 
 templ signedOutPage() {
 	@layout("Signed out", "") {

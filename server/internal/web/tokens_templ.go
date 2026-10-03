@@ -254,7 +254,7 @@ func tokensPage(tokens []store.APIToken, form tokenForm, created string, csrf st
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, " class=\"size-4 accent-indigo-600\"> Submit scans</label> <label class=\"mt-2 flex items-center gap-2 text-sm\"><input type=\"checkbox\" name=\"read\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, " class=\"size-4 accent-amber-600\"> Submit scans</label> <label class=\"mt-2 flex items-center gap-2 text-sm\"><input type=\"checkbox\" name=\"read\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -264,7 +264,7 @@ func tokensPage(tokens []store.APIToken, form tokenForm, created string, csrf st
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, " class=\"size-4 accent-indigo-600\"> Read results through the API</label></fieldset><div><label for=\"repos\" class=\"block text-sm font-medium\">Repositories it may scan</label> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, " class=\"size-4 accent-amber-600\"> Read results through the API</label></fieldset><div><label for=\"repos\" class=\"block text-sm font-medium\">Repositories it may scan</label> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -575,7 +575,7 @@ func tokensPage(tokens []store.APIToken, form tokenForm, created string, csrf st
 	})
 }
 
-const inputClass = "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-indigo-500 dark:border-slate-700 dark:bg-slate-950"
+const inputClass = "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:outline-2 focus:outline-offset-1 focus:outline-amber-500 dark:border-slate-700 dark:bg-slate-950"
 
 func signedOutPage() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {

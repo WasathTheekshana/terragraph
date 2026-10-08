@@ -24,6 +24,17 @@ const (
 
 	FactTypeModuleCall = "module_call"
 	FactTypeVersionTag = "version_tag"
+	FactTypeInventory  = "inventory"
+	FactTypeResource   = "resource"
+	FactTypeVariable   = "variable"
+	FactTypeOutput     = "output"
+
+	ModeManaged = "managed"
+	ModeData    = "data"
+
+	EnabledTrue    = "true"
+	EnabledFalse   = "false"
+	EnabledUnknown = "unknown"
 
 	ResolutionSourceModulesJSON = "modules-json"
 	ResolutionSourceParse       = "source-parse"
@@ -86,7 +97,36 @@ type Fact struct {
 	Tag       string `json:"tag,omitempty"`
 	SemVer    string `json:"semver,omitempty"`
 	CommitSHA string `json:"commit_sha,omitempty"`
+
+	// inventory fields
+	Backend  string `json:"backend,omitempty"`
+	StateKey string `json:"state_key,omitempty"`
+
+	// resource fields. Parent, File, and Line are shared with module calls.
+	Address        string            `json:"address,omitempty"`
+	Mode           string            `json:"mode,omitempty"`
+	ResourceType   string            `json:"resource_type,omitempty"`
+	Enabled        string            `json:"enabled,omitempty"`
+	Instances      *int              `json:"instances,omitempty"`
+	Condition      string            `json:"condition,omitempty"`
+	Attrs          map[string]string `json:"attrs,omitempty"`
+	Unresolved     map[string]string `json:"unresolved,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+	TagsUnresolved map[string]string `json:"tags_unresolved,omitempty"`
+
+	// variable and output fields; resources use Name too.
+	Name        string   `json:"name,omitempty"`
+	VarType     string   `json:"var_type,omitempty"`
+	Value       string   `json:"value,omitempty"`
+	ValueSource string   `json:"value_source,omitempty"`
+	Sensitive   bool     `json:"sensitive,omitempty"`
+	Flag        bool     `json:"flag,omitempty"`
+	Controls    []string `json:"controls,omitempty"`
+	Expr        string   `json:"expr,omitempty"`
 }
+
+// maxMapEntries bounds the attributes and tags of one resource.
+const maxMapEntries = 200
 
 // Validate reports every problem with r, so a pipeline author can fix them
 // in one go.
@@ -116,9 +156,24 @@ func (r Report) Validate() error {
 			add("subject.kind must be %q for %s scans", SubjectKindProject, r.ScannerType)
 		}
 		seen := make(map[string]bool)
+		inventories := 0
 		for i, f := range r.Facts {
-			if f.Type != FactTypeModuleCall {
-				add("facts[%d].type must be %q", i, FactTypeModuleCall)
+			switch f.Type {
+			case FactTypeModuleCall:
+			case FactTypeInventory:
+				inventories++
+				if inventories > 1 {
+					add("facts[%d]: a report has at most one %s fact", i, FactTypeInventory)
+				}
+				continue
+			case FactTypeResource, FactTypeVariable, FactTypeOutput:
+				if inventories == 0 {
+					add("facts[%d]: a %s fact needs an %s fact before it", i, f.Type, FactTypeInventory)
+				}
+				validateInventoryFact(f, i, seen, add)
+				continue
+			default:
+				add("facts[%d].type %q is not recognized", i, f.Type)
 				continue
 			}
 			address := f.CallName
@@ -166,4 +221,44 @@ func (r Report) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// validateInventoryFact checks a resource, variable, or output fact. Their identities
+// share the seen set with module calls, so each is prefixed with its kind.
+func validateInventoryFact(f Fact, i int, seen map[string]bool, add func(string, ...any)) {
+	if f.Parent != "" && slices.Contains(strings.Split(f.Parent, "."), "") {
+		add("facts[%d].parent %q must be dot-separated call names", i, f.Parent)
+	}
+	switch f.Type {
+	case FactTypeResource:
+		if f.Address == "" || f.ResourceType == "" || f.Name == "" {
+			add("facts[%d]: a resource needs address, resource_type, and name", i)
+		}
+		if f.Mode != ModeManaged && f.Mode != ModeData {
+			add("facts[%d].mode %q must be %q or %q", i, f.Mode, ModeManaged, ModeData)
+		}
+		if f.Enabled != EnabledTrue && f.Enabled != EnabledFalse && f.Enabled != EnabledUnknown {
+			add("facts[%d].enabled %q is not recognized", i, f.Enabled)
+		}
+		if f.Instances != nil && *f.Instances < 0 {
+			add("facts[%d].instances must not be negative", i)
+		}
+		if len(f.Attrs) > maxMapEntries || len(f.Unresolved) > maxMapEntries || len(f.Tags) > maxMapEntries || len(f.TagsUnresolved) > maxMapEntries {
+			add("facts[%d]: attrs and tags are limited to %d entries each", i, maxMapEntries)
+		}
+		if key := "resource:" + f.Address; f.Address != "" && seen[key] {
+			add("facts[%d] resource %q is duplicated", i, f.Address)
+		} else {
+			seen[key] = true
+		}
+	case FactTypeVariable, FactTypeOutput:
+		if f.Name == "" {
+			add("facts[%d].name is required", i)
+		}
+		if key := f.Type + ":" + f.Parent + "/" + f.Name; seen[key] {
+			add("facts[%d] %s %q is duplicated", i, f.Type, f.Name)
+		} else {
+			seen[key] = true
+		}
+	}
 }

@@ -49,6 +49,24 @@ scan report format may still change.
   - Focus on one project, repo, or module, up or down, to a given depth. `level=repo` collapses
     projects into their repos, and `max_nodes` falls back to repos and then trims the least
     connected nodes.
+- **Resource inventory**
+  - The scanner records what each root creates and looks up: resources and data sources with
+    their names, locations, and tags, the variables that act as feature switches, outputs, and
+    where state is kept. Values are worked out from variables, locals, tfvars, module inputs,
+    `count`, `for_each`, and common functions; what can't be known from the source is kept as the
+    expression and marked unresolved. Secrets and unlisted attributes are never read.
+  - A resource dependency graph at `/resources/graph`: a data block is linked to the resource
+    another project creates, and a `terraform_remote_state` block to the project that keeps that
+    state. Lookups that nothing scanned creates point to "outside the scanned projects". View it
+    per project, per repository, or per resource, filter by resource type or tag, and select a
+    line to see each lookup with its file and line.
+  - An inventory at `/resources`, filterable by type, tag, project, and whether the resource is
+    switched on, with counts for each type and tag.
+  - An environment comparison at `/repos/{id}/environments`: the projects of one repo side by
+    side, showing which resources exist, which are switched off by a feature flag, which flags and
+    settings differ, and which tags each environment uses.
+  - `GET /api/v1/resources`, `/resources/facets`, `/resources/graph`, `/projects/{id}/inventory`,
+    and `/repos/{id}/environments`.
 - **Authentication**
   - Sign-in through any OpenID Connect provider with the authorization code flow and PKCE, with
     sessions stored in Postgres.

@@ -51,6 +51,10 @@ const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 's
 
 type Store interface {
 	graph.Source
+	graph.ResourceSource
+	CountResources(ctx context.Context, f store.ResourceFilter) (int, error)
+	ResourceFacets(ctx context.Context, f store.ResourceFilter) (store.Facets, error)
+	ProjectInventory(ctx context.Context, projectID int64) (store.Inventory, error)
 	GetRepo(ctx context.Context, id int64) (store.Repo, error)
 	RepoProjects(ctx context.Context, repoID int64) ([]store.Project, error)
 	GetProject(ctx context.Context, id int64) (store.Project, error)
@@ -107,6 +111,10 @@ func newHandler(s Store, a Authenticator, log *slog.Logger, now func() time.Time
 	mux.Handle("GET /projects/{id}", page(h.project))
 	mux.Handle("GET /modules", page(h.modules))
 	mux.Handle("GET /modules/{id}", page(h.module))
+	mux.Handle("GET /resources", page(h.resources))
+	mux.Handle("GET /resources/graph", page(h.resourceGraphPage))
+	mux.Handle("GET /resources/graph/data", page(h.resourceGraphData))
+	mux.Handle("GET /repos/{id}/environments", page(h.environments))
 	mux.Handle("GET /graph", page(h.graphPage))
 	mux.Handle("GET /graph/data", page(h.graphData))
 	mux.Handle("GET /runs", page(h.runs))

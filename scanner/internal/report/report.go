@@ -35,6 +35,13 @@ type FactType string
 const (
 	FactTypeModuleCall FactType = "module_call"
 	FactTypeVersionTag FactType = "version_tag"
+
+	// An inventory fact opens a project report's resource section, saying where the
+	// project keeps its state. Its resource, variable, and output facts follow.
+	FactTypeInventory FactType = "inventory"
+	FactTypeResource  FactType = "resource"
+	FactTypeVariable  FactType = "variable"
+	FactTypeOutput    FactType = "output"
 )
 
 // ResolutionSource records how a module call's ref was determined.
@@ -70,6 +77,32 @@ type Fact struct {
 	Tag       string `json:"tag,omitempty"`
 	SemVer    string `json:"semver,omitempty"`
 	CommitSHA string `json:"commit_sha,omitempty"`
+
+	// inventory fields
+	Backend  string `json:"backend,omitempty"`
+	StateKey string `json:"state_key,omitempty"`
+
+	// resource fields. Parent, File, and Line are shared with module calls.
+	Address        string            `json:"address,omitempty"`
+	Mode           string            `json:"mode,omitempty"`
+	ResourceType   string            `json:"resource_type,omitempty"`
+	Enabled        string            `json:"enabled,omitempty"`
+	Instances      *int              `json:"instances,omitempty"`
+	Condition      string            `json:"condition,omitempty"`
+	Attrs          map[string]string `json:"attrs,omitempty"`
+	Unresolved     map[string]string `json:"unresolved,omitempty"`
+	Tags           map[string]string `json:"tags,omitempty"`
+	TagsUnresolved map[string]string `json:"tags_unresolved,omitempty"`
+
+	// variable and output fields; resources use Name too.
+	Name        string   `json:"name,omitempty"`
+	VarType     string   `json:"var_type,omitempty"`
+	Value       string   `json:"value,omitempty"`
+	ValueSource string   `json:"value_source,omitempty"`
+	Sensitive   bool     `json:"sensitive,omitempty"`
+	Flag        bool     `json:"flag,omitempty"`
+	Controls    []string `json:"controls,omitempty"`
+	Expr        string   `json:"expr,omitempty"`
 }
 
 type ScanReport struct {

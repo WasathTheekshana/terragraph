@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,16 +18,18 @@ import (
 )
 
 type fakeStore struct {
-	repos    []store.Repo
-	projects []store.Project
-	modules  []store.Module
-	usages   []store.Usage
-	runs     []store.Run
-	items    []store.RunItem
-	tokens   []store.APIToken
-	created  []store.NewAPIToken
-	revoked  []int64
-	err      error
+	resources   []store.Resource
+	inventories map[int64]store.Inventory
+	repos       []store.Repo
+	projects    []store.Project
+	modules     []store.Module
+	usages      []store.Usage
+	runs        []store.Run
+	items       []store.RunItem
+	tokens      []store.APIToken
+	created     []store.NewAPIToken
+	revoked     []int64
+	err         error
 }
 
 func (f *fakeStore) ListAPITokens(context.Context) ([]store.APIToken, error) { return f.tokens, f.err }
@@ -78,6 +81,59 @@ var (
 	reader = auth.Principal{Kind: auth.KindUser, Name: "bob@acme.io", UserID: 8, CanRead: true, CSRFToken: "csrf-bob"}
 	open   = auth.Principal{Kind: auth.KindOpen, Admin: true, CanRead: true, CanIngest: true, CSRFToken: "csrf-open"}
 )
+
+func (f *fakeStore) ListResources(_ context.Context, fl store.ResourceFilter) ([]store.Resource, error) {
+	var out []store.Resource
+	for _, r := range f.resources {
+		if fl.ProjectID != 0 && r.ProjectID != fl.ProjectID || fl.RepoID != 0 && r.RepoID != fl.RepoID ||
+			fl.Type != "" && r.Type != fl.Type || fl.Mode != "" && r.Mode != fl.Mode {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, f.err
+}
+
+func (f *fakeStore) CountResources(ctx context.Context, fl store.ResourceFilter) (int, error) {
+	fl.Limit = 0
+	r, err := f.ListResources(ctx, fl)
+	return len(r), err
+}
+
+func (f *fakeStore) ResourceFacets(_ context.Context, fl store.ResourceFilter) (store.Facets, error) {
+	counts := map[string]int{}
+	for _, r := range f.resources {
+		counts[r.Type]++
+	}
+	facets := store.Facets{Types: []store.Count{}, TagKeys: []store.Count{}}
+	for t, n := range counts {
+		facets.Types = append(facets.Types, store.Count{Value: t, Count: n})
+	}
+	sort.Slice(facets.Types, func(i, j int) bool { return facets.Types[i].Value < facets.Types[j].Value })
+	for _, k := range []string{"env", "owner"} {
+		n := 0
+		for _, r := range f.resources {
+			if _, ok := r.Tags[k]; ok {
+				n++
+			}
+		}
+		if n > 0 {
+			facets.TagKeys = append(facets.TagKeys, store.Count{Value: k, Count: n})
+		}
+	}
+	return facets, f.err
+}
+
+func (f *fakeStore) ListInventories(context.Context) (map[int64]store.Inventory, error) {
+	return f.inventories, f.err
+}
+
+func (f *fakeStore) ProjectInventory(_ context.Context, id int64) (store.Inventory, error) {
+	if inv, ok := f.inventories[id]; ok {
+		return inv, f.err
+	}
+	return store.Inventory{ProjectID: id}, f.err
+}
 
 func (f *fakeStore) ListProjects(context.Context) ([]store.Project, error) { return f.projects, f.err }
 

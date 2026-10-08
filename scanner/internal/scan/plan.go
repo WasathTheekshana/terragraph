@@ -17,6 +17,7 @@ import (
 	"github.com/WasathTheekshana/terragraph/scanner/internal/gitinfo"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/gittags"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/hclscan"
+	"github.com/WasathTheekshana/terragraph/scanner/internal/inventory"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/moduleinit"
 	"github.com/WasathTheekshana/terragraph/scanner/internal/report"
 )
@@ -135,6 +136,7 @@ func projectReport(root discover.Root, t Target, commit, branch string) report.S
 		manifest = nil
 	}
 	facts := collectCalls(root, manifest)
+	facts = append(facts, collectInventory(root, manifest)...)
 	return report.New(report.ScannerTypeModuleUsage, report.Subject{
 		Kind:      report.SubjectKindProject,
 		RepoURL:   t.RepoURL,
@@ -179,6 +181,37 @@ func collectCalls(root discover.Root, manifest *moduleinit.Manifest) []report.Fa
 		}
 	}
 	walk(root.Dir, root.Calls, "", 0)
+	return facts
+}
+
+// collectInventory lists what a root creates and looks up. A root whose resources
+// can't be read reports none, which leaves what the server knows about them alone.
+func collectInventory(root discover.Root, manifest *moduleinit.Manifest) []report.Fact {
+	inv, err := inventory.Collect(root.Dir, inventory.Options{
+		ModuleDir: func(callerDir, address, source string) string {
+			return moduleDir(callerDir, address, source, manifest)
+		},
+	})
+	if err != nil {
+		return nil
+	}
+	facts := []report.Fact{{Type: report.FactTypeInventory, Backend: inv.Backend, StateKey: inv.StateKey}}
+	for _, r := range inv.Resources {
+		facts = append(facts, report.Fact{
+			Type: report.FactTypeResource, Address: r.Address, Mode: r.Mode, ResourceType: r.Type, Name: r.Name,
+			Parent: r.ModulePath, Enabled: r.Enabled, Instances: r.Instances, Condition: r.Condition,
+			File: r.File, Line: r.Line, Attrs: r.Attrs, Unresolved: r.Unresolved, Tags: r.Tags, TagsUnresolved: r.TagsUnresolved,
+		})
+	}
+	for _, v := range inv.Variables {
+		facts = append(facts, report.Fact{
+			Type: report.FactTypeVariable, Name: v.Name, Parent: v.ModulePath, VarType: v.Type, Value: v.Value,
+			ValueSource: v.Source, Sensitive: v.Sensitive, Flag: v.Flag, Controls: v.Controls,
+		})
+	}
+	for _, o := range inv.Outputs {
+		facts = append(facts, report.Fact{Type: report.FactTypeOutput, Name: o.Name, Parent: o.ModulePath, Expr: o.Expr, Sensitive: o.Sensitive})
+	}
 	return facts
 }
 

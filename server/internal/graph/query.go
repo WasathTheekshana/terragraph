@@ -84,3 +84,48 @@ func OptionsFromQuery(q url.Values) (Options, error) {
 	}
 	return opts, nil
 }
+
+// ResourceSource is where the resource graph's data is read from.
+type ResourceSource interface {
+	ListRepos(ctx context.Context) ([]store.Repo, error)
+	ListProjects(ctx context.Context) ([]store.Project, error)
+	ListResources(ctx context.Context, f store.ResourceFilter) ([]store.Resource, error)
+	ListInventories(ctx context.Context) (map[int64]store.Inventory, error)
+}
+
+// LoadResources reads everything the resource graph is built from.
+func LoadResources(ctx context.Context, s ResourceSource) (ResourceInput, error) {
+	var in ResourceInput
+	var err error
+	if in.Repos, err = s.ListRepos(ctx); err != nil {
+		return in, err
+	}
+	if in.Projects, err = s.ListProjects(ctx); err != nil {
+		return in, err
+	}
+	if in.Resources, err = s.ListResources(ctx, store.ResourceFilter{}); err != nil {
+		return in, err
+	}
+	in.Inventories, err = s.ListInventories(ctx)
+	return in, err
+}
+
+// ResourceOptionsFromQuery reads project or repo to focus on; direction (down, up, both); depth;
+// level (project, repo, resource); type; tag (key or key=value, repeatable); isolated; and
+// max_nodes.
+func ResourceOptionsFromQuery(q url.Values) (ResourceOptions, error) {
+	base, err := OptionsFromQuery(q)
+	if err != nil {
+		return ResourceOptions{}, err
+	}
+	opts := ResourceOptions{Level: base.Level, Focus: base.Focus, MaxNodes: base.MaxNodes, Type: q.Get("type")}
+	if opts.Tags, err = store.ParseTags(q["tag"]); err != nil {
+		return opts, err
+	}
+	if q.Has("isolated") {
+		if opts.Isolated, err = strconv.ParseBool(q.Get("isolated")); err != nil {
+			return opts, errors.New("isolated must be true or false")
+		}
+	}
+	return opts, nil
+}

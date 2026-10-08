@@ -171,6 +171,9 @@ func facts(t *testing.T, dir string) map[string]report.Fact {
 			t.Fatalf("%s: %v", tg, tg.Err)
 		}
 		for _, f := range tg.Report.Facts {
+			if f.Type != report.FactTypeModuleCall {
+				continue
+			}
 			addr := f.CallName
 			if f.Parent != "" {
 				addr = f.Parent + "." + f.CallName
@@ -308,4 +311,44 @@ func keys(m map[string]Target) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestProjectReportsListWhatTheProjectCreates(t *testing.T) {
+	base := t.TempDir()
+	write(t, base, "main.tf", `
+variable "enable_dns" {
+  type    = bool
+  default = true
+}
+resource "azurerm_virtual_network" "main" {
+  name = "vnet-main"
+  tags = { env = "dev" }
+}
+resource "azurerm_private_dns_zone" "z" {
+  count = var.enable_dns ? 1 : 0
+  name  = "internal.example.com"
+}
+output "vnet" { value = azurerm_virtual_network.main.id }
+`)
+	targets, err := PlanProjects(Options{Path: base, RepoURL: "https://github.com/org/app.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byType := map[report.FactType][]report.Fact{}
+	for _, f := range targets[0].Report.Facts {
+		byType[f.Type] = append(byType[f.Type], f)
+	}
+	if len(byType[report.FactTypeInventory]) != 1 {
+		t.Fatalf("want one inventory fact opening the section, got %d", len(byType[report.FactTypeInventory]))
+	}
+	if len(byType[report.FactTypeResource]) != 2 || len(byType[report.FactTypeVariable]) != 1 || len(byType[report.FactTypeOutput]) != 1 {
+		t.Errorf("resources %d, variables %d, outputs %d", len(byType[report.FactTypeResource]), len(byType[report.FactTypeVariable]), len(byType[report.FactTypeOutput]))
+	}
+	vnet := byType[report.FactTypeResource][1]
+	if vnet.Address != "azurerm_virtual_network.main" || vnet.Attrs["name"] != "vnet-main" || vnet.Tags["env"] != "dev" || vnet.ResourceType != "azurerm_virtual_network" {
+		t.Errorf("vnet = %+v", vnet)
+	}
+	if v := byType[report.FactTypeVariable][0]; !v.Flag || v.Value != "true" || len(v.Controls) != 1 {
+		t.Errorf("flag = %+v", v)
+	}
 }

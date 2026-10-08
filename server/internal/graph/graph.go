@@ -35,6 +35,8 @@ const (
 	TypeModule     NodeType = "module"      // a shared module, or one subdirectory of a repo of modules
 	TypeModuleRepo NodeType = "module_repo" // groups the modules that live in one source repo
 	TypeLocal      NodeType = "local"       // a ./local module, shown only when asked for
+	TypeResource   NodeType = "resource"    // one resource or data source, in the resource graph
+	TypeExternal   NodeType = "external"    // something looked up that no scanned project creates
 )
 
 // Status says how current a pinned version is. Edges and versions carry the
@@ -103,8 +105,19 @@ type Node struct {
 	// Local modules.
 	Source string `json:"source,omitempty"`
 
+	// Sub is a second line to show under the label, for nodes the fields above don't describe.
+	Sub string `json:"sub,omitempty"`
+	// Details are labelled facts for the node's panel, for nodes the fields above don't describe.
+	Details []Detail `json:"details,omitempty"`
+
 	// Cycle is true when the node is part of a dependency cycle.
 	Cycle bool `json:"cycle,omitempty"`
+}
+
+// Detail is one labelled fact about a node.
+type Detail struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 // VersionUse is one version of a module that something pins.
@@ -128,6 +141,13 @@ type Edge struct {
 	// Projects are the projects whose calls make up the edge.
 	Projects []int64 `json:"projects"`
 	Cycle    bool    `json:"cycle,omitempty"`
+
+	// Label is what to write on the edge, instead of its versions, for edges that don't have any.
+	Label string `json:"label,omitempty"`
+	// Items and Details say what the edge stands for, in the resource graph: the resource types,
+	// and each lookup with where it is.
+	Items   []string `json:"items,omitempty"`
+	Details []string `json:"details,omitempty"`
 }
 
 type Stats struct {
@@ -138,6 +158,12 @@ type Stats struct {
 	Cycles   int `json:"cycles"`
 	// Orphans counts nested calls whose calling module is missing from the data.
 	Orphans int `json:"orphans"`
+
+	// The resource graph also counts the lookups it drew, the ones that find nothing scanned
+	// (external), and the ones that couldn't be read from the source (unresolved).
+	Links      int `json:"links,omitempty"`
+	External   int `json:"external,omitempty"`
+	Unresolved int `json:"unresolved,omitempty"`
 }
 
 type Graph struct {

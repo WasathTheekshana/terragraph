@@ -128,6 +128,24 @@ future scanner types don't require a schema migration on the ingest side.
 - `ref_resolved`: the exact commit when the module was installed as a git clone, otherwise the same as `ref_declared`.
 - `version_resolved`: the exact version Terraform selected for a registry module. Only present after `terraform init`/`get`.
 
+A project report can also carry its resource inventory, which is what powers the resource pages.
+An `inventory` fact opens the section (`backend` and `state_key` say where the project keeps its
+state), followed by:
+
+- `resource`: `address` (`module.net.azurerm_virtual_network.main`, `data.azurerm_key_vault.kv`),
+  `mode` (`managed` or `data`), `resource_type`, `name`, `parent` (the module path), `enabled`
+  (`true`, `false`, or `unknown`, from `count` and `for_each`), `instances`, `condition` (the
+  `count` or `for_each` expression), `file`, `line`, `attrs` (resolved values of the recorded
+  attributes), `unresolved` (the expression for each recorded attribute that couldn't be
+  resolved), `tags`, and `tags_unresolved`.
+- `variable`: `name`, `parent`, `var_type`, `value`, `value_source` (`default`, `tfvars`, `input`
+  from the calling module, or `unset`), `sensitive`, `flag` (a boolean, or one that decides
+  whether something is created), and `controls` (the resources whose `count` depends on it).
+- `output`: `name`, `parent`, `expr`, `sensitive`.
+
+A scan with an `inventory` fact replaces everything recorded for the project; one without it, from
+an older scanner, leaves what is there alone.
+
 For `scanner_type: module-repo` (run against a ModuleRepo, not a Project):
 
 ```json

@@ -22,6 +22,10 @@ const token = "test-token"
 type fakeStore struct {
 	// data, when set, is what the list methods return for the graph.
 	data *graph.Input
+	// res and inv are the resources and inventories of the projects in data.
+	res    []store.Resource
+	inv    map[int64]store.Inventory
+	resErr error
 
 	ingested  []store.Scan
 	ingestErr error
@@ -111,6 +115,18 @@ func (f *fakeStore) GetRepo(_ context.Context, id int64) (store.Repo, error) {
 }
 
 func (f *fakeStore) RepoProjects(_ context.Context, id int64) ([]store.Project, error) {
+	if f.data != nil {
+		var out []store.Project
+		for _, p := range f.data.Projects {
+			if p.RepoID == id {
+				out = append(out, p)
+			}
+		}
+		if out == nil {
+			return nil, store.ErrNotFound
+		}
+		return out, nil
+	}
 	return []store.Project{{ID: 1, RepoID: id, Path: "envs/dev"}, {ID: 2, RepoID: id, Path: "envs/prod"}}, nil
 }
 

@@ -39,6 +39,7 @@ templ page(title string, active string, refresh int) {
 						@navLink("/", "Projects", active == "projects")
 						@navLink("/modules", "Modules", active == "modules")
 						@navLink("/graph", "Graph", active == "graph")
+						@navLink("/resources", "Resources", active == "resources")
 						@navLink("/runs", "Scans", active == "runs")
 						if signedIn && p.Admin {
 							@navLink("/settings/tokens", "Settings", active == "settings")

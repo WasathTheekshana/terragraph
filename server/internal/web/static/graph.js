@@ -30,7 +30,8 @@
   }
 
   var LABELS = { current: "up to date", outdated: "outdated", major_behind: "major version behind", unknown: "unknown" };
-  var TYPES = { repo: "Repository", project: "Terraform project", module: "Module", module_repo: "Module repository", local: "Local module" };
+  var TYPES = { repo: "Repository", project: "Terraform project", module: "Module", module_repo: "Module repository", local: "Local module", resource: "Resource", external: "Outside the scanned projects" };
+  var resourceGraph = root.dataset.src.indexOf("/resources/") === 0;
 
   var view = { x: 0, y: 0, k: 1 };
   var model = null;
@@ -75,7 +76,9 @@
   function layout(g) {
     var groups = {};
     g.nodes.forEach(function (n) { groups[n.id] = n; });
-    var nodes = g.nodes.filter(function (n) { return n.type !== "module_repo" && !(n.type === "repo" && g.level === "project"); });
+    var isGroup = {};
+    g.nodes.forEach(function (n) { if (n.group) isGroup[n.group] = true; });
+    var nodes = g.nodes.filter(function (n) { return !isGroup[n.id]; });
     var byId = {};
     nodes.forEach(function (n) { byId[n.id] = n; n.out = []; n.in = []; });
     var edges = g.edges.filter(function (e) { return byId[e.from] && byId[e.to]; });
@@ -218,6 +221,10 @@
       var g = el("g", {}, edgeLayer);
       e.path = el("path", { d: d, "class": cls, "marker-end": "url(#arrow)" }, g);
       el("title", {}, e.path).appendChild(text(edgeTitle(e)));
+      var hit = el("path", { d: d, "class": "edge-hit" }, g);
+      hit.addEventListener("click", function (ev) { ev.stopPropagation(); selectEdge(e); });
+      hit.addEventListener("mouseenter", function () { highlightEdge(e); });
+      hit.addEventListener("mouseleave", refreshHighlight);
       var label = edgeLabel(e);
       if (label) {
         var lg = el("g", { "class": "edge-label", transform: "translate(" + (x1 + x2) / 2 + " " + (y1 + y2) / 2 + ")" }, g);
@@ -244,11 +251,12 @@
       g.addEventListener("click", function (ev) { ev.stopPropagation(); select(n); });
       g.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(n); } });
       g.addEventListener("mouseenter", function () { highlight(n); });
-      g.addEventListener("mouseleave", function () { highlight(selected); });
+      g.addEventListener("mouseleave", refreshHighlight);
     });
   }
 
   function subline(n) {
+    if (n.sub) return n.sub;
     switch (n.type) {
       case "repo": return n.projects + (n.projects === 1 ? " project" : " projects") + ", " + (n.module_calls || 0) + " module calls";
       case "project": return n.path && n.path !== "." ? n.path : "repository root";
@@ -268,6 +276,7 @@
   }
 
   function edgeLabel(e) {
+    if (e.label) return clip(e.label);
     if (!e.versions || !e.versions.length) return "";
     if (e.versions.length === 1) return clip(e.versions[0]);
     return e.versions[0] + " +" + (e.versions.length - 1);
@@ -279,6 +288,7 @@
     parts.push(LABELS[e.status] || e.status);
     parts.push(e.origins.join(", "));
     if (e.via && e.via.length) parts.push("through " + e.via.join(", "));
+    if (e.details && e.details.length) parts.push(e.details.join("\n"));
     return parts.join("\n");
   }
 
@@ -303,7 +313,67 @@
     model.nodes.forEach(function (m) { if (!near[m.id]) m.el.classList.add("dim"); });
   }
 
+  var selectedEdge = null;
+
+  function refreshHighlight() {
+    if (selectedEdge) highlightEdge(selectedEdge);
+    else highlight(selected);
+  }
+
+  // highlightEdge dims everything except one edge and the two nodes it joins.
+  function highlightEdge(e) {
+    highlight(null);
+    model.nodes.forEach(function (m) { if (m !== e.source && m !== e.target) m.el.classList.add("dim"); });
+    model.edges.forEach(function (o) { if (o !== e) o.path.parentNode.classList.add("dim"); });
+    e.path.classList.add("hot");
+  }
+
+  function selectEdge(e) {
+    if (selected) selected.el.classList.remove("selected");
+    selected = null;
+    selectedEdge = e;
+    highlightEdge(e);
+    showEdgePanel(e);
+  }
+
+  function showEdgePanel(e) {
+    panel.replaceChildren();
+    panel.hidden = false;
+    panel.appendChild(h("p", "text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-400", "Dependency"));
+    panel.appendChild(h("h2", "mt-1 text-base font-semibold break-all", e.source.label + " \u2192 " + e.target.label));
+    var dl = h("dl", "mt-3 text-sm");
+    dl.appendChild(row("From", e.source.sub ? e.source.label + " (" + e.source.sub + ")" : e.source.label));
+    dl.appendChild(row("To", e.target.sub ? e.target.label + " (" + e.target.sub + ")" : e.target.label));
+    dl.appendChild(row("Calls", String(e.calls)));
+    if (e.versions && e.versions.length) dl.appendChild(row("Versions", e.versions.join(", ")));
+    dl.appendChild(row("Status", LABELS[e.status] || e.status));
+    if (e.origins && e.origins.length) dl.appendChild(row("Seen as", e.origins.join(", ")));
+    if (e.via && e.via.length) dl.appendChild(row("Through", e.via.join(", ")));
+    panel.appendChild(dl);
+    if (e.items && e.items.length) {
+      panel.appendChild(h("h3", HEADING, "What it is for"));
+      var items = h("ul", "mt-1 font-mono text-xs");
+      e.items.forEach(function (i) { items.appendChild(h("li", "py-0.5 break-all", i)); });
+      panel.appendChild(items);
+    }
+    if (e.details && e.details.length) {
+      panel.appendChild(h("h3", HEADING, "Lookups"));
+      var list = h("ul", "mt-1 space-y-2 text-sm");
+      e.details.forEach(function (d) { list.appendChild(h("li", "break-all", d)); });
+      panel.appendChild(list);
+    }
+    var actions = h("div", "mt-5 flex flex-col gap-1.5 border-t border-slate-200 pt-4 text-sm dark:border-slate-800");
+    [e.source, e.target].forEach(function (n) {
+      var b = h("button", "text-left font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300", "Select " + n.label);
+      b.type = "button";
+      b.addEventListener("click", function () { select(n); centerOn(n); });
+      actions.appendChild(b);
+    });
+    panel.appendChild(actions);
+  }
+
   function select(n) {
+    selectedEdge = null;
     if (selected) selected.el.classList.remove("selected");
     selected = n;
     if (n) n.el.classList.add("selected");
@@ -324,7 +394,7 @@
     ["project", "repo", "module", "direction"].forEach(function (k) { q.delete(k); });
     q.set(m[1], m[2]);
     q.set("direction", direction);
-    return "/graph?" + q.toString();
+    return (resourceGraph ? "/resources/graph?" : "/graph?") + q.toString();
   }
 
   function row(label, value) {
@@ -344,13 +414,15 @@
     panel.appendChild(h("h2", "mt-1 text-base font-semibold break-all", n.label));
 
     var dl = h("dl", "mt-3 text-sm");
+    var generic = n.details && n.details.length > 0;
+    if (generic) n.details.forEach(function (d) { dl.appendChild(row(d.label, d.value)); });
     if (n.key) dl.appendChild(row("Source", n.key + (n.subdir ? "//" + n.subdir : "")));
     if (n.repo_url) dl.appendChild(row("Repository", n.repo_url));
     if (n.type === "project" && n.path) dl.appendChild(row("Path", n.path));
     if (n.branch) dl.appendChild(row("Branch", n.branch));
     if (n.latest_version) dl.appendChild(row("Latest version", n.latest_version));
-    if (n.type === "repo") dl.appendChild(row("Projects", String(n.projects)));
-    if (n.type === "repo" || n.type === "project") {
+    if (n.type === "repo" && !generic) dl.appendChild(row("Projects", String(n.projects)));
+    if ((n.type === "repo" || n.type === "project") && !generic) {
       dl.appendChild(row("Module calls", String(n.module_calls || 0)));
       if (n.outdated_calls) dl.appendChild(row("Outdated", String(n.outdated_calls)));
       if (n.major_behind_calls) dl.appendChild(row("Major behind", String(n.major_behind_calls)));
@@ -402,8 +474,8 @@
     if (n.href) actions.appendChild(link(n.href, "Open page"));
     if (n.repo_href) actions.appendChild(link(n.repo_href, "Open the module's repo"));
     if (focusURL(n, "down")) {
-      actions.appendChild(link(focusURL(n, "down"), "Graph what it depends on"));
-      actions.appendChild(link(focusURL(n, "up"), "Graph what depends on it"));
+      actions.appendChild(link(focusURL(n, "down"), resourceGraph ? "Graph what it looks up" : "Graph what it depends on"));
+      actions.appendChild(link(focusURL(n, "up"), resourceGraph ? "Graph who looks up what it creates" : "Graph what depends on it"));
       actions.appendChild(link(focusURL(n, "both"), "Graph both directions"));
     }
     panel.appendChild(actions);
@@ -443,7 +515,7 @@
   function bind() {
     var drag = null;
     svg.addEventListener("pointerdown", function (ev) {
-      if (ev.target.closest(".node")) return;
+      if (ev.target.closest(".node") || ev.target.closest(".edge-hit")) return;
       drag = { x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y, moved: false };
       svg.setPointerCapture(ev.pointerId);
       svg.classList.add("dragging");
@@ -458,7 +530,7 @@
     });
     function end(ev) {
       if (!drag) return;
-      if (!drag.moved) select(null);
+      if (!drag.moved) { selectedEdge = null; select(null); }
       drag = null;
       svg.classList.remove("dragging");
       if (svg.hasPointerCapture(ev.pointerId)) svg.releasePointerCapture(ev.pointerId);

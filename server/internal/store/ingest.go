@@ -107,7 +107,8 @@ func ingestModuleUsage(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, e
 		return IngestResult{ScanID: scanID}, nil
 	}
 
-	moduleIDs, err := upsertModules(ctx, tx, r.Facts)
+	calls := moduleCalls(r.Facts)
+	moduleIDs, err := upsertModules(ctx, tx, calls)
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -116,8 +117,8 @@ func ingestModuleUsage(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, e
 		return IngestResult{}, fmt.Errorf("clearing module usages: %w", err)
 	}
 
-	rows := make([][]any, 0, len(r.Facts))
-	for _, f := range r.Facts {
+	rows := make([][]any, 0, len(calls))
+	for _, f := range calls {
 		var moduleID any
 		if kind, key := source.Parse(f.Source); kind != source.KindLocal {
 			moduleID = moduleIDs[key]
@@ -134,6 +135,10 @@ func ingestModuleUsage(ctx context.Context, tx pgx.Tx, in Scan) (IngestResult, e
 	}, pgx.CopyFromRows(rows))
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("inserting module usages: %w", err)
+	}
+
+	if err := replaceInventory(ctx, tx, projectID, scanID, r.Facts); err != nil {
+		return IngestResult{}, err
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -206,6 +211,16 @@ func insertScan(ctx context.Context, tx pgx.Tx, in Scan, projectID, moduleID *in
 		return 0, fmt.Errorf("inserting scan: %w", err)
 	}
 	return id, nil
+}
+
+func moduleCalls(facts []report.Fact) []report.Fact {
+	calls := make([]report.Fact, 0, len(facts))
+	for _, f := range facts {
+		if f.Type == report.FactTypeModuleCall {
+			calls = append(calls, f)
+		}
+	}
+	return calls
 }
 
 // upsertModules makes sure every non-local module referenced by facts

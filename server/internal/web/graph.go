@@ -19,6 +19,55 @@ type graphView struct {
 	Level     string
 	Locals    bool
 	DataURL   string
+
+	// Resources is true for the resource graph, which shows what projects create and look up
+	// rather than the modules they call.
+	Resources bool
+	Type      string
+	// Tags are the tag filters; the first is in the form and the rest are carried along.
+	Tags     []string
+	Isolated bool
+}
+
+func newResourceGraphView(q url.Values) graphView {
+	v := newGraphView(q)
+	v.Resources = true
+	v.Type = q.Get("type")
+	v.Tags = q["tag"]
+	v.Isolated = q.Get("isolated") == "true"
+	v.DataURL = "/resources/graph/data"
+	if enc := q.Encode(); enc != "" {
+		v.DataURL += "?" + enc
+	}
+	return v
+}
+
+func (v graphView) firstTag() string {
+	if len(v.Tags) > 0 {
+		return v.Tags[0]
+	}
+	return ""
+}
+
+func (v graphView) otherTags() []string {
+	if len(v.Tags) > 1 {
+		return v.Tags[1:]
+	}
+	return nil
+}
+
+func (v graphView) action() string {
+	if v.Resources {
+		return "/resources/graph"
+	}
+	return "/graph"
+}
+
+func (v graphView) active() string {
+	if v.Resources {
+		return "resources"
+	}
+	return "graph"
 }
 
 func newGraphView(q url.Values) graphView {
@@ -37,13 +86,30 @@ func newGraphView(q url.Values) graphView {
 
 // focusNode is the node to select when the page opens: the project or repo being looked at.
 func (v graphView) focusNode() string {
-	if v.FocusKind == "project" || v.FocusKind == "repo" {
+	switch {
+	case v.Resources && (v.Level == "resource" || v.FocusKind == "project" && v.Level == "repo"):
+		return ""
+	case v.FocusKind == "project" || v.FocusKind == "repo":
 		return v.FocusKind + ":" + v.FocusID
 	}
 	return ""
 }
 
+func graphTitle(v graphView) string {
+	if v.Resources {
+		return "Resource dependencies"
+	}
+	return "Dependency graph"
+}
+
 func graphSubtitle(v graphView) string {
+	if v.Resources {
+		switch v.FocusKind {
+		case "project", "repo":
+			return "What this project creates that others look up, and what it looks up that others create. Select a node or a line for details."
+		}
+		return "Which project creates what another project looks up with a data block or reads from its state. Select a node or a line for details."
+	}
 	switch v.FocusKind {
 	case "project":
 		return "One project and the modules it depends on. Select a node for details."

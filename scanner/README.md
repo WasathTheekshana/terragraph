@@ -57,6 +57,16 @@ step notices.
   `github.com/...`) is listed with `git ls-remote` so the server knows its latest release. This
   uses your normal git access (SSH key or credential manager) and never prompts; a repo you
   can't reach fails with git's reason. Turn it off with `--skip-module-versions`.
+- **Resources:** every root's `resource` and `data` blocks, its variables, outputs, and where its
+  state is kept (`backend` or `cloud` block). The scanner works from the source files alone, so
+  it evaluates what it can: variables (defaults, `terraform.tfvars`, `*.auto.tfvars`), locals,
+  `count` and `for_each`, and common functions such as `format`, `join`, `merge`, and `lower`. Local
+  modules get the values their caller passes in. For each resource it keeps the attributes that
+  name and place it (`name`, `resource_group_name`, `location`, `cidr_block`, `sku`, and a few
+  more) and its `tags`. A value that depends on something only known when Terraform runs, such as
+  another module's output, is kept as the expression and marked unresolved rather than guessed.
+  Passwords, tokens, keys, and every attribute outside that short list are never read, and a
+  variable that is `sensitive` or named like a secret is reported without its value.
 - **Folders outside git** are identified by their location on this machine
   (`file://host/path`).
 

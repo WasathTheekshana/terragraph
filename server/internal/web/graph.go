@@ -106,9 +106,9 @@ func graphSubtitle(v graphView) string {
 	if v.Resources {
 		switch v.FocusKind {
 		case "project", "repo":
-			return "What this project creates that others look up, and what it looks up that others create. Select a node or a line for details."
+			return "What this project creates that others look up, and what it looks up that others create. Drag blocks to arrange them and select a node or a line for details."
 		}
-		return "Which project creates what another project looks up with a data block or reads from its state. Select a node or a line for details."
+		return "Which project creates what another project looks up with a data block or reads from its state. Drag blocks to arrange them and select a node or a line for details."
 	}
 	switch v.FocusKind {
 	case "project":
@@ -118,7 +118,7 @@ func graphSubtitle(v graphView) string {
 	case "module":
 		return "One module, what it depends on, and what uses it. Select a node for details."
 	}
-	return "Every project and the modules it calls. Drag to pan, scroll to zoom, select a node for details."
+	return "Every project and the modules it calls. Drag a block to move it, drag the background to pan, scroll to zoom, select a node for details."
 }
 
 func (h *handler) graphPage(w http.ResponseWriter, r *http.Request) {

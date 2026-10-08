@@ -69,3 +69,10 @@
 #graph-canvas .match rect.box { stroke: var(--accent); stroke-width: 2.5; }
 
 #graph-canvas marker path { fill: var(--edge); }
+
+#graph-canvas .group rect { cursor: move; }
+#graph-canvas .node { cursor: grab; }
+#graph-canvas.moving, #graph-canvas.moving .node, #graph-canvas.moving .group rect { cursor: grabbing; }
+#graph-canvas.hide-labels .edge-label { display: none; }
+#graph-canvas.hide-labels .edge-label.show { display: inline; }
+#graph-canvas .edge-label.show rect { stroke: var(--accent); }

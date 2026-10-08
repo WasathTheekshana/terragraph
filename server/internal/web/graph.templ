@@ -81,7 +81,7 @@ templ graphPage(v graphView) {
 			id="graph"
 			data-src={ v.DataURL }
 			data-focus={ v.focusNode() }
-			class="relative mt-4 flex h-[70vh] min-h-96 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+			class="relative mt-4 flex h-[78vh] min-h-96 overflow-hidden rounded-lg border border-slate-200 bg-white lg:left-1/2 lg:w-[min(96vw,1800px)] lg:-translate-x-1/2 dark:border-slate-800 dark:bg-slate-900"
 		>
 			<svg id="graph-canvas" class="h-full min-w-0 flex-1" role="img" aria-label="Dependency graph"></svg>
 			<noscript>
@@ -100,6 +100,8 @@ templ graphPage(v graphView) {
 				<button id="graph-zoom-in" type="button" aria-label="Zoom in" class="px-3 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800">+</button>
 				<button id="graph-zoom-out" type="button" aria-label="Zoom out" class="border-l border-slate-300 px-3 py-1.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">&minus;</button>
 				<button id="graph-fit" type="button" class="border-l border-slate-300 px-3 py-1.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Fit</button>
+				<button id="graph-labels" type="button" title="Show or hide the text on the lines" class="border-l border-slate-300 px-3 py-1.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Labels</button>
+				<button id="graph-reset" type="button" title="Put every block back where it was first placed" class="border-l border-slate-300 px-3 py-1.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Reset layout</button>
 			</div>
 			<aside id="graph-panel" hidden class="w-80 shrink-0 overflow-y-auto border-l border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"></aside>
 		</div>
